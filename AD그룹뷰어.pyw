@@ -1175,6 +1175,16 @@ class MemberBrowseDialog(QDialog):
             self.tag_layout.addWidget(placeholder)
             self.tag_layout.addStretch()
             return
+        new_desc = self.desc_input.text().strip()
+        try:
+            with self.get_connection() as conn:
+                conn.modify(self.group_dn, {"description": [(ldap3.MODIFY_REPLACE, [new_desc])]})
+                if conn.result.get("result") == 0:
+                    QMessageBox.information(self, "성공", "그룹 설명이 저장되었습니다.")
+                else:
+                    QMessageBox.critical(self, "실패", f"설명 저장 실패:\n{conn.result}")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"설명 저장 실패:\n{str(e)}")
 
         for row_idx in selected_rows:
             row = row_idx.row()
