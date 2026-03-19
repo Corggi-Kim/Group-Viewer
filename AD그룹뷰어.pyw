@@ -1010,7 +1010,7 @@ class MemberBrowseDialog(QDialog):
         self.tag_scroll = QScrollArea()
         self.tag_scroll.setWidgetResizable(True)
         self.tag_scroll.setFixedHeight(56)
-        self.tag_scroll.setStyleSheet("QScrollArea { border: 1px solid #444; background-color: #2b2b2b; }")
+        self.tag_scroll.setStyleSheet("QScrollArea { border: none; background-color: #2b2b2b; }")
         self.tag_widget = QWidget()
         self.tag_layout = QHBoxLayout()
         self.tag_layout.setContentsMargins(6, 6, 6, 6)
@@ -1168,33 +1168,31 @@ class MemberBrowseDialog(QDialog):
             if widget:
                 widget.deleteLater()
 
-        selected_rows = self.user_table.selectionModel().selectedRows()
+        selection_model = self.user_table.selectionModel()
+        if selection_model is None:
+            return
+
+        selected_rows = selection_model.selectedRows()
         if not selected_rows:
             placeholder = QLabel("선택된 사용자가 여기에 표시됩니다.")
             placeholder.setStyleSheet("color: #aaaaaa; padding: 4px;")
             self.tag_layout.addWidget(placeholder)
             self.tag_layout.addStretch()
             return
-        new_desc = self.desc_input.text().strip()
-        try:
-            with self.get_connection() as conn:
-                conn.modify(self.group_dn, {"description": [(ldap3.MODIFY_REPLACE, [new_desc])]})
-                if conn.result.get("result") == 0:
-                    QMessageBox.information(self, "성공", "그룹 설명이 저장되었습니다.")
-                else:
-                    QMessageBox.critical(self, "실패", f"설명 저장 실패:\n{conn.result}")
-        except Exception as e:
-            QMessageBox.critical(self, "LDAP 오류", f"설명 저장 실패:\n{str(e)}")
 
         for row_idx in selected_rows:
             row = row_idx.row()
-            emp = self.user_table.item(row, 0).text() if self.user_table.item(row, 0) else ""
-            name = self.user_table.item(row, 2).text() if self.user_table.item(row, 2) else ""
+            if row < 0 or row >= self.user_table.rowCount():
+                continue
+            emp_item = self.user_table.item(row, 0)
+            name_item = self.user_table.item(row, 2)
+            emp = emp_item.text() if emp_item else ""
+            name = name_item.text() if name_item else ""
             tag = QPushButton(f"{name} ✕")
             tag.setCursor(Qt.PointingHandCursor)
             tag.setStyleSheet(
                 "background-color:#2b2b2b; color:#e0e0e0; border:none; border-radius:8px; "
-                "padding:2px 8px; font-size:11px;"
+                "padding:2px 8px; font-size:11px; outline:none;"
             )
             tag.clicked.connect(lambda _, employee_id=emp: self.remove_selected_tag(employee_id))
             self.tag_layout.addWidget(tag)
