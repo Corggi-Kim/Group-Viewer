@@ -158,8 +158,8 @@ class ADGroupViewer(QWidget):
 
         self.member_table = QTableWidget()
         self.member_table.setMinimumHeight(300)
-        self.member_table.setColumnCount(3)
-        self.member_table.setHorizontalHeaderLabels(['사원 번호', '표시 이름', '메일 주소'])
+        self.member_table.setColumnCount(4)
+        self.member_table.setHorizontalHeaderLabels(['사원 번호', '부서', '표시 이름', '메일 주소'])
         self.member_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.member_table.setRowCount(0)
 
@@ -247,12 +247,13 @@ class ADGroupViewer(QWidget):
         if file_path:
             try:
                 with open(file_path, 'w', encoding='utf-8-sig') as file:
-                    file.write("사원 번호,표시 이름,메일 주소\n")
+                    file.write("사원 번호,부서,표시 이름,메일 주소\n")
                     for member in self.member_list:
                         sAMAccountName = member[0] if member[0] else ""
-                        displayName = member[1] if member[1] else ""
-                        mail = member[2] if member[2] else ""
-                        line = f"{sAMAccountName},{displayName},{mail}\n"
+                        department = member[1] if member[1] else ""
+                        displayName = member[2] if member[2] else ""
+                        mail = member[3] if member[3] else ""
+                        line = f"{sAMAccountName},{department},{displayName},{mail}\n"
                         file.write(line)
 
                 QMessageBox.information(self, "성공", "멤버 목록이 성공적으로 저장되었습니다.")
@@ -429,7 +430,7 @@ class ADGroupViewer(QWidget):
                 members = group['member']
                 if not members:
                     self.member_table.setRowCount(1)
-                    self.member_table.setSpan(0, 0, 1, 3)
+                    self.member_table.setSpan(0, 0, 1, 4)
                     no_member_msg = QTableWidgetItem("그룹에 추가된 사용자가 없습니다.")
                     no_member_msg.setTextAlignment(Qt.AlignCenter)
                     self.member_table.setItem(0, 0, no_member_msg)
@@ -440,21 +441,28 @@ class ADGroupViewer(QWidget):
                     user_dn = str(member)
                     user_name = user_dn.split(",")[0].split("=")[1]
                     user_filter = f"(|(sAMAccountName={user_name})(displayName={user_name}))"
-                    conn.search(search_base="DC=lskglobal,DC=com", search_filter=user_filter, attributes=["sAMAccountName", "displayName", "mail"])
+                    conn.search(
+                        search_base="DC=lskglobal,DC=com",
+                        search_filter=user_filter,
+                        attributes=["sAMAccountName", "department", "displayName", "mail"]
+                    )
                     user_entries = conn.entries
                     if user_entries:
                         user_attributes = user_entries[0]
                         sAMAccountName = user_attributes["sAMAccountName"][0] if "sAMAccountName" in user_attributes else ""
+                        department = user_attributes["department"][0] if "department" in user_attributes else ""
                         displayName = user_attributes["displayName"][0] if "displayName" in user_attributes else ""
                         mail = user_attributes["mail"][0] if "mail" in user_attributes else ""
                         self.member_table.setItem(i, 0, QTableWidgetItem(sAMAccountName))
-                        self.member_table.setItem(i, 1, QTableWidgetItem(displayName))
-                        self.member_table.setItem(i, 2, QTableWidgetItem(mail))
-                        self.member_list.append((sAMAccountName, displayName, mail))
+                        self.member_table.setItem(i, 1, QTableWidgetItem(department))
+                        self.member_table.setItem(i, 2, QTableWidgetItem(displayName))
+                        self.member_table.setItem(i, 3, QTableWidgetItem(mail))
+                        self.member_list.append((sAMAccountName, department, displayName, mail))
                     else:
                         self.member_table.setItem(i, 0, QTableWidgetItem(""))
                         self.member_table.setItem(i, 1, QTableWidgetItem(""))
                         self.member_table.setItem(i, 2, QTableWidgetItem(""))
+                        self.member_table.setItem(i, 3, QTableWidgetItem(""))
             else:
                 self.result_text.setPlainText("그룹을 찾을 수 없습니다.")
 
@@ -469,12 +477,14 @@ class ADGroupViewer(QWidget):
             text = ""
             for row in range(self.member_table.rowCount()):
                 sAMAccountName_item = self.member_table.item(row, 0)
-                displayName_item = self.member_table.item(row, 1)
-                mail_item = self.member_table.item(row, 2)
+                department_item = self.member_table.item(row, 1)
+                displayName_item = self.member_table.item(row, 2)
+                mail_item = self.member_table.item(row, 3)
                 sAMAccountName = sAMAccountName_item.text() if sAMAccountName_item else ""
+                department = department_item.text() if department_item else ""
                 displayName = displayName_item.text() if displayName_item else ""
                 mail = mail_item.text() if mail_item else ""
-                text += f"{sAMAccountName}\t{displayName}\t{mail}\n"
+                text += f"{sAMAccountName}\t{department}\t{displayName}\t{mail}\n"
             clipboard = QApplication.clipboard()
             clipboard.setText(text, mode=clipboard.Clipboard)
             self.result_text.setPlainText("모든 멤버 정보가 클립보드에 복사되었습니다.")
@@ -642,7 +652,7 @@ class MemberManagementDialog(QDialog):
         self.member_combo.setEditable(True)
         self.member_combo.setInsertPolicy(QComboBox.NoInsert)
         self.member_combo.addItem("")
-        self.member_combo.addItems([f"{member[1]} ({member[0]}, {member[2]})" for member in members])
+        self.member_combo.addItems([f"{member[2]} ({member[0]}, {member[3]})" for member in members])
 
         completer = QCompleter()
         completer.setCompletionMode(QCompleter.CompletionMode(0))
@@ -729,64 +739,70 @@ class MemberManagementDialog(QDialog):
         except subprocess.CalledProcessError as e:
             QMessageBox.critical(self, "오류", f"실행에 실패했습니다.\n{str(e)}")
 
-    def resolve_identifier(self, identifier):
-        server_uri = f"ldap://{self.account_info['server_ip']}"
+    def get_group_dn(self, conn):
+        escaped_group_name = escape_filter_chars(self.group_name)
+        search_filter = f"(|(cn={escaped_group_name})(displayName={escaped_group_name}))"
+        conn.search(
+            search_base="DC=lskglobal,DC=com",
+            search_filter=search_filter,
+            attributes=["distinguishedName"]
+        )
+        if not conn.entries:
+            return None
+        return conn.entries[0].entry_dn
+
+    def resolve_identifier(self, identifier, conn):
+        escaped_identifier = escape_filter_chars(identifier)
+        search_filter = (
+            f"(|"
+            f"(displayName=*{escaped_identifier}*)"
+            f"(sAMAccountName=*{escaped_identifier}*)"
+            f"(mail=*{escaped_identifier}*)"
+            f")"
+        )
+
         try:
-            with ldap3.Connection(server_uri, user=self.account_info['user'],
-                                  password=self.account_info['password'], auto_bind=True) as conn:
-
-                escaped_identifier = escape_filter_chars(identifier)
-
-                search_filter = (
-                    f"(|"
-                    f"(displayName=*{escaped_identifier}*)"
-                    f"(sAMAccountName=*{escaped_identifier}*)"
-                    f"(mail=*{escaped_identifier}*)"
-                    f")"
-                )
-
-                try:
-                    conn.search(
-                        search_base="DC=lskglobal,DC=com",
-                        search_filter=search_filter,
-                        attributes=["sAMAccountName", "displayName", "mail"]
-                    )
-                except LDAPInvalidFilterError as e:
-                    QMessageBox.critical(
-                        self,
-                        "LDAP 오류",
-                        f"잘못된 필터: {search_filter}\n{str(e)}"
-                    )
-                    return None
-
-                if conn.entries:
-                    if len(conn.entries) == 1:
-                        return conn.entries[0]["sAMAccountName"].value
-                    else:
-                        dialog = AccountSelectionDialog(conn.entries, self)
-                        if dialog.exec_() == QDialog.Accepted:
-                            return dialog.get_selected_account()
-                        else:
-                            QMessageBox.information(
-                                self,
-                                "취소",
-                                "계정 선택이 취소되었습니다."
-                            )
-                            return None
-                else:
-                    QMessageBox.critical(
-                        self,
-                        "오류",
-                        "사용자를 찾을 수 없습니다."
-                    )
-                    return None
-        except Exception as e:
+            conn.search(
+                search_base="DC=lskglobal,DC=com",
+                search_filter=search_filter,
+                attributes=["sAMAccountName", "displayName", "mail", "distinguishedName"]
+            )
+        except LDAPInvalidFilterError as e:
             QMessageBox.critical(
                 self,
                 "LDAP 오류",
-                f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}"
+                f"잘못된 필터: {search_filter}\n{str(e)}"
             )
             return None
+
+        if conn.entries:
+            if len(conn.entries) == 1:
+                return conn.entries[0].entry_dn
+            dialog = AccountSelectionDialog(conn.entries, self)
+            if dialog.exec_() == QDialog.Accepted:
+                selected_account = dialog.get_selected_account()
+                selected_account_filter = f"(sAMAccountName={escape_filter_chars(selected_account)})"
+                conn.search(
+                    search_base="DC=lskglobal,DC=com",
+                    search_filter=selected_account_filter,
+                    attributes=["distinguishedName"]
+                )
+                if conn.entries:
+                    return conn.entries[0].entry_dn
+            else:
+                QMessageBox.information(
+                    self,
+                    "취소",
+                    "계정 선택이 취소되었습니다."
+                )
+            return None
+
+        QMessageBox.critical(
+            self,
+            "오류",
+            "사용자를 찾을 수 없습니다."
+        )
+        return None
 
     def add_member(self):
         identifiers = self.member_combo.currentText().strip().split(',')
@@ -796,44 +812,61 @@ class MemberManagementDialog(QDialog):
             QMessageBox.warning(self, "경고", "추가할 사용자를 입력하세요.")
             return
 
-        resolved_list = []
-        for identifier in identifiers:
-            resolved = self.resolve_identifier(identifier)
-            if resolved is not None:
-                resolved_list.append((identifier, resolved))
+        server_uri = f"ldap://{self.account_info['server_ip']}"
+        try:
+            with ldap3.Connection(
+                server_uri,
+                user=self.account_info['user'],
+                password=self.account_info['password'],
+                auto_bind=True
+            ) as conn:
+                group_dn = self.get_group_dn(conn)
+                if not group_dn:
+                    QMessageBox.critical(self, "오류", f"그룹 '{self.group_name}' DN을 찾을 수 없습니다.")
+                    return
 
-        if not resolved_list:
-            QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
-            return
+                resolved_list = []
+                for identifier in identifiers:
+                    user_dn = self.resolve_identifier(identifier, conn)
+                    if user_dn is not None:
+                        resolved_list.append((identifier, user_dn))
 
-        self.progress_dialog = QProgressDialog("사용자 추가 중...", "취소", 0, len(resolved_list), self)
-        self.progress_dialog.setWindowTitle("진행 상황")
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
-        self.progress_dialog.setMinimumDuration(0)
+                if not resolved_list:
+                    QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
+                    return
 
-        success_count = 0
-        for index, (orig_identifier, resolved_id) in enumerate(resolved_list, start=1):
-            if self.progress_dialog.wasCanceled():
-                QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
-                return
+                self.progress_dialog = QProgressDialog("사용자 추가 중...", "취소", 0, len(resolved_list), self)
+                self.progress_dialog.setWindowTitle("진행 상황")
+                self.progress_dialog.setWindowModality(Qt.WindowModal)
+                self.progress_dialog.setMinimumDuration(0)
 
-            command = f"Add-ADGroupMember -Identity '{self.group_name}' -Members '{resolved_id}'"
-            try:
-                subprocess.run(
-                    ["powershell", "-Command", command],
-                    check=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                success_count += 1
-            except Exception as e:
-                QMessageBox.critical(self, "오류", f"{orig_identifier} 추가 중 오류 발생:\n{str(e)}")
+                success_count = 0
+                for index, (orig_identifier, user_dn) in enumerate(resolved_list, start=1):
+                    if self.progress_dialog.wasCanceled():
+                        QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
+                        return
 
-            self.progress_dialog.setValue(index)
-            self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 추가 중...")
-            QApplication.processEvents()
+                    modify_result = conn.modify(
+                        group_dn,
+                        {"member": [(ldap3.MODIFY_ADD, [user_dn])]}
+                    )
+                    if modify_result:
+                        success_count += 1
+                    else:
+                        QMessageBox.critical(
+                            self,
+                            "오류",
+                            f"{orig_identifier} 추가 실패:\n{conn.result}"
+                        )
 
-        self.progress_dialog.close()
-        QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 추가 작업이 완료되었습니다.")
+                    self.progress_dialog.setValue(index)
+                    self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 추가 중...")
+                    QApplication.processEvents()
+
+                self.progress_dialog.close()
+                QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 추가 작업이 완료되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
 
     def remove_member(self):
         identifiers = self.member_combo.currentText().strip().split(',')
@@ -843,44 +876,61 @@ class MemberManagementDialog(QDialog):
             QMessageBox.warning(self, "경고", "제거할 사용자를 입력하세요.")
             return
 
-        resolved_list = []
-        for identifier in identifiers:
-            resolved = self.resolve_identifier(identifier)
-            if resolved is not None:
-                resolved_list.append((identifier, resolved))
+        server_uri = f"ldap://{self.account_info['server_ip']}"
+        try:
+            with ldap3.Connection(
+                server_uri,
+                user=self.account_info['user'],
+                password=self.account_info['password'],
+                auto_bind=True
+            ) as conn:
+                group_dn = self.get_group_dn(conn)
+                if not group_dn:
+                    QMessageBox.critical(self, "오류", f"그룹 '{self.group_name}' DN을 찾을 수 없습니다.")
+                    return
 
-        if not resolved_list:
-            QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
-            return
+                resolved_list = []
+                for identifier in identifiers:
+                    user_dn = self.resolve_identifier(identifier, conn)
+                    if user_dn is not None:
+                        resolved_list.append((identifier, user_dn))
 
-        self.progress_dialog = QProgressDialog("사용자 제거 중...", "취소", 0, len(resolved_list), self)
-        self.progress_dialog.setWindowTitle("진행 상황")
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
-        self.progress_dialog.setMinimumDuration(0)
+                if not resolved_list:
+                    QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
+                    return
 
-        success_count = 0
-        for index, (orig_identifier, resolved_id) in enumerate(resolved_list, start=1):
-            if self.progress_dialog.wasCanceled():
-                QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
-                return
+                self.progress_dialog = QProgressDialog("사용자 제거 중...", "취소", 0, len(resolved_list), self)
+                self.progress_dialog.setWindowTitle("진행 상황")
+                self.progress_dialog.setWindowModality(Qt.WindowModal)
+                self.progress_dialog.setMinimumDuration(0)
 
-            command = f"Remove-ADGroupMember -Identity '{self.group_name}' -Members '{resolved_id}' -Confirm:$false"
-            try:
-                subprocess.run(
-                    ["powershell", "-Command", command],
-                    check=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                success_count += 1
-            except Exception as e:
-                QMessageBox.critical(self, "오류", f"{orig_identifier} 제거 중 오류 발생:\n{str(e)}")
+                success_count = 0
+                for index, (orig_identifier, user_dn) in enumerate(resolved_list, start=1):
+                    if self.progress_dialog.wasCanceled():
+                        QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
+                        return
 
-            self.progress_dialog.setValue(index)
-            self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 제거 중...")
-            QApplication.processEvents()
+                    modify_result = conn.modify(
+                        group_dn,
+                        {"member": [(ldap3.MODIFY_DELETE, [user_dn])]}
+                    )
+                    if modify_result:
+                        success_count += 1
+                    else:
+                        QMessageBox.critical(
+                            self,
+                            "오류",
+                            f"{orig_identifier} 제거 실패:\n{conn.result}"
+                        )
 
-        self.progress_dialog.close()
-        QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 제거 작업이 완료되었습니다.")
+                    self.progress_dialog.setValue(index)
+                    self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 제거 중...")
+                    QApplication.processEvents()
+
+                self.progress_dialog.close()
+                QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 제거 작업이 완료되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
 
 class CreateGroupDialog(QDialog):
     def __init__(self, group_name="", account_info=None, parent=None):
