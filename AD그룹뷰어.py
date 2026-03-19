@@ -1,0 +1,1027 @@
+# exe 패키징 시 주의
+# ldap3의 일부 모듈(ldap3.utils.conv, ldap3.core.exceptions)은 자동 포함되지 않음
+# → auto-py-to-exe에서 hidden import에 반드시 추가해야 함
+
+import sys
+import tempfile
+import re
+
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QLineEdit, QAbstractItemView,
+    QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QFormLayout, QGridLayout,
+    QMessageBox, QComboBox, QProgressDialog, QHBoxLayout, QFileDialog, QInputDialog, QCompleter
+)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
+from PyQt5 import QtCore
+from ldap3.utils.conv import escape_filter_chars
+from ldap3.core.exceptions import LDAPInvalidFilterError
+import ldap3
+import json
+import os
+import subprocess
+
+class ADGroupViewer(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.account_info = self.load_account_info()
+        if not isinstance(self.account_info, dict):
+            self.account_info = {"server_ip": "", "user": "", "password": ""}
+        self.member_list = []
+        self.initUI()
+        self.apply_custom_styles()
+ 
+    def apply_custom_styles(self):
+        custom_style = """
+            QWidget {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 12px;
+            }
+
+            QPushButton {
+                background-color: #3C3C3C;
+                color: #E0E0E0;
+                border-radius: 6px;
+                padding: 10px;
+                font-weight: bold;
+            }
+
+            QPushButton:hover {
+                background-color: #2A2A2A;
+            }
+
+            QLabel {
+                font-size: 13px;
+                font-weight: bold;
+                color: #f0f0f0;
+            }
+
+            QLineEdit {
+                background-color: #3b3b3b;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                color: #f0f0f0;
+            }
+
+            QTableWidget {
+                background-color: #3b3b3b;
+                border: 1px solid #444;
+                gridline-color: #555;
+            }
+
+            QHeaderView::section {
+                background-color: #3C3C3C;
+                color: white;
+                padding: 8px;
+                border: 1px solid #2A2A2A;
+            }
+
+            QTextEdit {
+                background-color: #3b3b3b;
+                border: 1px solid #555;
+                padding: 5px;
+                color: #f0f0f0;
+            }
+        """
+        self.setStyleSheet(custom_style)
+
+    def style_buttons(self, button):
+        button.setFixedSize(110, 40)
+        button.setStyleSheet("""
+            QPushButton {
+                background-color: #3C3C3C;
+                color: #E0E0E0;
+                border-radius: 6px;
+                padding: 10px;
+                text-align: center;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2A2A2A;
+            }
+        """)
+
+    def initUI(self):
+        self.setWindowTitle('AD 그룹 뷰어')
+        self.setGeometry(100, 100, 650, 700)
+        self.layout = QVBoxLayout()
+
+        search_layout = QGridLayout()
+        self.group_label = QLabel('AD 그룹 이름:')
+        self.group_input = QLineEdit()
+
+        self.show_button = QPushButton('검색')
+        self.create_group_button = QPushButton('그룹 생성')
+        self.style_buttons(self.show_button)
+        self.style_buttons(self.create_group_button)
+
+        search_layout.addWidget(self.group_label, 0, 0)
+        search_layout.addWidget(self.group_input, 0, 1, 1, 2)
+        search_layout.addWidget(self.show_button, 0, 3)
+        search_layout.addWidget(self.create_group_button, 0, 4)
+
+        filter_layout = QGridLayout()
+        self.filter_label = QLabel("결과내 검색:")
+        self.filter_input = QLineEdit()
+        self.copy_button = QPushButton('결과 복사')
+        self.save_button = QPushButton('내보내기')
+
+        self.style_buttons(self.copy_button)
+        self.style_buttons(self.save_button)
+
+        filter_layout.addWidget(self.filter_label, 0, 0)
+        filter_layout.addWidget(self.filter_input, 0, 1, 1, 2)
+        filter_layout.addWidget(self.copy_button, 0, 3)
+        filter_layout.addWidget(self.save_button, 0, 4)
+
+        self.filter_input.textChanged.connect(self.filter_member_table)
+
+        management_layout = QHBoxLayout()
+        self.account_button = QPushButton('AD 서버 정보')
+        self.manage_members_button = QPushButton('멤버 관리')
+        self.sync_button = QPushButton('동기화')
+
+        self.account_button.setFixedSize(150, 45)
+        self.manage_members_button.setFixedSize(150, 45)
+        self.sync_button.setFixedSize(150, 45)
+
+        management_layout.addStretch()
+        management_layout.addWidget(self.account_button)
+        management_layout.addSpacing(20)
+        management_layout.addWidget(self.manage_members_button)
+        management_layout.addSpacing(20)
+        management_layout.addWidget(self.sync_button)
+        management_layout.addStretch()
+
+        self.member_table = QTableWidget()
+        self.member_table.setMinimumHeight(300)
+        self.member_table.setColumnCount(3)
+        self.member_table.setHorizontalHeaderLabels(['사원 번호', '표시 이름', '메일 주소'])
+        self.member_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.member_table.setRowCount(0)
+
+        self.member_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.member_table.verticalHeader().setDefaultSectionSize(40)
+        self.member_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.member_table.verticalHeader().setVisible(False)
+
+        self.result_text = QTextEdit()
+        self.result_text.setFixedHeight(150)
+
+        self.layout.addLayout(search_layout)
+        self.layout.addLayout(filter_layout)
+        self.layout.addWidget(self.member_table)
+        self.layout.addLayout(management_layout)
+        self.layout.addWidget(self.result_text)
+
+        self.setLayout(self.layout)
+        self.center()
+
+        self.show_button.clicked.connect(self.show_group_members)
+        self.create_group_button.clicked.connect(self.open_group_creation_dialog)
+        self.copy_button.clicked.connect(self.copy_all_members)
+        self.save_button.clicked.connect(self.save_member_list)
+        self.account_button.clicked.connect(self.open_account_management)
+        self.manage_members_button.clicked.connect(self.open_member_management)
+        self.sync_button.clicked.connect(self.execute_sync_script)
+
+    def center_on_parent(self, dialog):
+        parent_geometry = self.geometry()
+        dialog_geometry = dialog.geometry()
+
+        x = parent_geometry.center().x() - (dialog_geometry.width() // 2)
+        y = parent_geometry.center().y() - (dialog_geometry.height() // 1)
+
+        dialog.move(x, y)
+
+    def open_group_creation_dialog(self):
+        group_name = self.group_input.text().strip()
+        server_ip = self.account_info.get('server_ip', '').strip()
+        user = self.account_info.get('user', '').strip()
+        password = self.account_info.get('password', '').strip()
+
+        if not server_ip or not user or not password:
+            QMessageBox.critical(self, "오류", "AD 서버 정보가 입력되지 않았습니다.\n관리자 계정 관리에서 설정해 주세요.")
+            return
+
+        server_uri = f"ldap://{server_ip}"
+        try:
+            conn = ldap3.Connection(server_uri, user=user, password=password, auto_bind=True)
+            conn.unbind()
+        except ldap3.core.exceptions.LDAPBindError:
+            QMessageBox.critical(self, "AD 인증 실패", "AD 서버 인증에 실패했습니다.\nID 또는 비밀번호를 확인해 주세요.")
+            return
+        except ldap3.LDAPException as e:
+            QMessageBox.critical(self, "AD 연결 오류", f"AD 서버 연결 중 오류 발생:\n{str(e)}")
+            return
+
+        if not group_name:
+            QMessageBox.warning(self, "경고", "그룹 이름을 입력하세요.")
+            return
+        
+        try:
+            dialog = CreateGroupDialog(group_name, self.account_info, self)
+            self.center_on_parent(dialog)
+            if dialog.exec_():
+                QMessageBox.information(self, "성공", f"그룹 '{group_name}'이 생성되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"그룹 생성 중 오류 발생:\n{str(e)}")
+
+    def save_member_list(self):
+        if not self.member_list:
+            QMessageBox.warning(self, "경고", "저장할 멤버 목록이 없습니다.")
+            return
+
+        options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "멤버 목록 저장",
+            os.path.join(os.getcwd(), "member_list.csv"),
+            "CSV Files (*.csv);;All Files (*)",
+            options=options
+        )
+
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8-sig') as file:
+                    file.write("사원 번호,표시 이름,메일 주소\n")
+                    for member in self.member_list:
+                        sAMAccountName = member[0] if member[0] else ""
+                        displayName = member[1] if member[1] else ""
+                        mail = member[2] if member[2] else ""
+                        line = f"{sAMAccountName},{displayName},{mail}\n"
+                        file.write(line)
+
+                QMessageBox.information(self, "성공", "멤버 목록이 성공적으로 저장되었습니다.")
+
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"파일 저장 중 오류 발생:\n{str(e)}")
+
+    def filter_member_table(self):
+        filter_text = self.filter_input.text().strip().lower()
+        for row in range(self.member_table.rowCount()):
+            match_found = False
+            for col in range(self.member_table.columnCount()):
+                item = self.member_table.item(row, col)
+                if item and filter_text in item.text().strip().lower():
+                    match_found = True
+                    break
+            self.member_table.setRowHidden(row, not match_found)
+
+    def center(self):
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            self.move(screen_geometry.center() - self.rect().center())
+
+    def execute_sync_script(self):
+        user = self.account_info.get('user')
+        password = self.account_info.get('password')
+
+        confirm = QMessageBox.question(
+            self, 
+            "동기화 확인", 
+            "정말로 동기화를 실행하시겠습니까?", 
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+
+        if confirm != QMessageBox.Yes:
+            return
+
+        if not user or not password:
+            QMessageBox.warning(self, "경고", "관리자 계정 정보가 없습니다. 관리자 계정 관리를 통해 정보를 설정해주세요.")
+            return
+
+        try:
+            self.run_powershell_sync(user, password)
+            QMessageBox.information(self, "성공", "동기화가 성공적으로 완료되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"동기화 중 오류가 발생했습니다:\n{str(e)}")
+
+    def run_powershell_sync(self, user, password):
+        computer_name = "Msync.lskglobal.com"
+
+        ps_command = f'''
+        $User = "{user}"
+        $PWord = ConvertTo-SecureString -String "{password}" -AsPlainText -Force
+        $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $User, $PWord
+        Invoke-Command -ComputerName "{computer_name}" -Credential $Credential -ScriptBlock {{
+            Start-ADSyncSyncCycle -PolicyType Delta
+        }}
+        '''
+
+        try:
+            subprocess.run(
+                ["powershell.exe", "-Command", ps_command],
+                check=True,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+        except subprocess.CalledProcessError as e:
+            error_output = e.stderr or str(e)
+            QMessageBox.critical(self, "동기화 실패", f"PowerShell 실행 중 오류 발생:\n{error_output}")
+
+    def load_account_info(self):
+        path = "C:/account_info.json"
+        try:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception:
+            pass
+        return {"server_ip": "", "user": "", "password": ""}
+
+    def save_account_info(self, server_ip, user, password):
+        self.account_info = {'server_ip': server_ip, 'user': user, 'password': password}
+        path = "C:/account_info.json"
+        with open(path, 'w') as f:
+            json.dump(self.account_info, f)
+
+    def open_account_management(self):
+        dialog = AccountManagementDialog(
+            self.account_info.get('server_ip', ''),
+            self.account_info.get('user', ''),
+            self.account_info.get('password', '')
+        )
+        self.center_on_parent(dialog)
+        if dialog.exec_():
+            new_server_ip, new_user, new_password = dialog.get_account_info()
+            self.save_account_info(new_server_ip, new_user, new_password)
+
+    def open_member_management(self):
+        try:
+            group_name = self.group_input.text().strip()
+            server_ip = self.account_info.get('server_ip', '').strip()
+            user = self.account_info.get('user', '').strip()
+            password = self.account_info.get('password', '').strip()
+
+            if not server_ip or not user or not password:
+                QMessageBox.critical(self, "오류", "AD 서버 정보가 입력되지 않았습니다.\n관리자 계정 관리에서 설정해 주세요.")
+                return
+
+            if not group_name:
+                 QMessageBox.warning(self, "경고", "그룹 이름을 입력해 주세요.")
+                 return
+
+            success = self.show_group_members()
+            if not success:
+                return
+
+            if "그룹을 찾을 수 없습니다." in self.result_text.toPlainText():
+                QMessageBox.warning(self, "경고", f"그룹 '{group_name}'을(를) 찾을 수 없습니다.")
+                return
+
+            dialog = MemberManagementDialog(group_name, self.member_list, self.account_info)
+            self.center_on_parent(dialog)
+            dialog.exec_()
+
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"멤버 관리 열기 중 오류 발생:\n{str(e)}")
+
+    def show_group_members(self):
+        server_ip = self.account_info.get('server_ip', '').strip()
+        user = self.account_info.get('user', '').strip()
+        password = self.account_info.get('password', '').strip()
+        group_name = self.group_input.text().strip()
+
+        if not server_ip or not user or not password:
+            QMessageBox.critical(self, "오류", "AD 서버 정보가 입력되지 않았습니다.\n관리자 계정 관리에서 설정해 주세요.")
+            return
+
+        if not group_name:
+            QMessageBox.warning(self, "경고", "그룹 이름 또는 표시 이름을 입력하세요.")
+            return
+
+        server_uri = f"ldap://{server_ip}"
+        self.member_list = []
+        self.member_table.clearSpans()
+        self.member_table.setRowCount(0)
+
+        try:
+            conn = ldap3.Connection(server_uri, user=self.account_info['user'],
+                                    password=self.account_info['password'], auto_bind=True)
+        except ldap3.core.exceptions.LDAPBindError as e:
+            QMessageBox.critical(self, "AD 인증 실패", "AD 서버 인증에 실패했습니다.\nID 또는 비밀번호를 확인해 주세요.")
+            return False
+        except ldap3.LDAPException as e:
+            QMessageBox.critical(self, "AD 연결 오류", f"AD 서버 연결 중 오류 발생:\n{str(e)}")
+            return False
+
+        try:
+            search_filter = f"(|(cn={group_name})(displayName={group_name}))"
+            conn.search(search_base="DC=lskglobal,DC=com", search_filter=search_filter, attributes=["member", "cn", "description"])
+            entries = conn.entries
+
+            if entries:
+                group = entries[0]
+                group_cn = str(group.cn) if hasattr(group, 'cn') else ""
+                group_description = group.description.value if hasattr(group, 'description') else ""
+                self.result_text.setPlainText(f"그룹 이름: {group_cn}\n그룹 설명: {group_description}\n\n")
+
+                members = group['member']
+                if not members:
+                    self.member_table.setRowCount(1)
+                    self.member_table.setSpan(0, 0, 1, 3)
+                    no_member_msg = QTableWidgetItem("그룹에 추가된 사용자가 없습니다.")
+                    no_member_msg.setTextAlignment(Qt.AlignCenter)
+                    self.member_table.setItem(0, 0, no_member_msg)
+                    return True
+
+                self.member_table.setRowCount(len(members))
+                for i, member in enumerate(members):
+                    user_dn = str(member)
+                    user_name = user_dn.split(",")[0].split("=")[1]
+                    user_filter = f"(|(sAMAccountName={user_name})(displayName={user_name}))"
+                    conn.search(search_base="DC=lskglobal,DC=com", search_filter=user_filter, attributes=["sAMAccountName", "displayName", "mail"])
+                    user_entries = conn.entries
+                    if user_entries:
+                        user_attributes = user_entries[0]
+                        sAMAccountName = user_attributes["sAMAccountName"][0] if "sAMAccountName" in user_attributes else ""
+                        displayName = user_attributes["displayName"][0] if "displayName" in user_attributes else ""
+                        mail = user_attributes["mail"][0] if "mail" in user_attributes else ""
+                        self.member_table.setItem(i, 0, QTableWidgetItem(sAMAccountName))
+                        self.member_table.setItem(i, 1, QTableWidgetItem(displayName))
+                        self.member_table.setItem(i, 2, QTableWidgetItem(mail))
+                        self.member_list.append((sAMAccountName, displayName, mail))
+                    else:
+                        self.member_table.setItem(i, 0, QTableWidgetItem(""))
+                        self.member_table.setItem(i, 1, QTableWidgetItem(""))
+                        self.member_table.setItem(i, 2, QTableWidgetItem(""))
+            else:
+                self.result_text.setPlainText("그룹을 찾을 수 없습니다.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"오류 발생: {str(e)}")
+            return False
+
+        return True
+
+    def copy_all_members(self):
+        try:
+            text = ""
+            for row in range(self.member_table.rowCount()):
+                sAMAccountName_item = self.member_table.item(row, 0)
+                displayName_item = self.member_table.item(row, 1)
+                mail_item = self.member_table.item(row, 2)
+                sAMAccountName = sAMAccountName_item.text() if sAMAccountName_item else ""
+                displayName = displayName_item.text() if displayName_item else ""
+                mail = mail_item.text() if mail_item else ""
+                text += f"{sAMAccountName}\t{displayName}\t{mail}\n"
+            clipboard = QApplication.clipboard()
+            clipboard.setText(text, mode=clipboard.Clipboard)
+            self.result_text.setPlainText("모든 멤버 정보가 클립보드에 복사되었습니다.")
+        except Exception as e:
+            self.result_text.setPlainText(f"복사 중 오류가 발생했습니다: {str(e)}")
+
+class AccountManagementDialog(QDialog):
+    def __init__(self, current_server_ip, current_user, current_password):
+        super().__init__()
+        self.setWindowTitle("AD 서버 정보 관리")
+        self.setGeometry(100, 100, 300, 100)
+        
+        self.server_ip_input = QLineEdit(current_server_ip)
+        self.user_input = QLineEdit(current_user)
+        self.password_input = QLineEdit(current_password)
+        self.password_input.setEchoMode(QLineEdit.Password)
+        
+        self.layout = QFormLayout()
+        self.layout.addRow("AD서버 IP :", self.server_ip_input)
+        self.layout.addRow("관리자 ID  :", self.user_input)
+        self.layout.addRow("비밀 번호  :", self.password_input)
+        
+        self.save_button = QPushButton("저장")
+        self.save_button.clicked.connect(self.accept)
+        self.layout.addWidget(self.save_button)
+        
+        self.setLayout(self.layout)
+        self.apply_custom_styles()
+
+        self.center()
+
+    def center(self):
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            self.move(screen_geometry.center() - self.rect().center())
+
+    def get_account_info(self):
+        return self.server_ip_input.text(), self.user_input.text(), self.password_input.text()
+    
+    def apply_custom_styles(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 12px;
+            }
+
+            QLineEdit {
+                background-color: #3b3b3b;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                color: #f0f0f0;
+            }
+
+            QPushButton {
+                background-color: #0078d7;
+                color: white;
+                border-radius: 6px;
+                padding: 10px;
+                font-weight: bold;
+            }
+
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+
+            QLabel {
+                font-size: 13px;
+                font-weight: bold;
+                color: #f0f0f0;
+            }
+        """)
+
+class AccountSelectionDialog(QDialog):
+    def __init__(self, entries, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("계정 선택")
+        self.entries = entries
+        self.layout = QVBoxLayout()
+        self.label = QLabel("여러 계정이 검색되었습니다. 선택해 주세요:")
+        self.combo = QComboBox()
+
+        for entry in entries:
+            sAMAccountName = entry["sAMAccountName"].value if "sAMAccountName" in entry else ""
+            displayName = entry["displayName"].value if "displayName" in entry else ""
+            mail = entry["mail"].value if "mail" in entry else ""
+            self.combo.addItem(f"{displayName} ({sAMAccountName}, {mail})", sAMAccountName)
+
+        self.ok_button = QPushButton("확인")
+        self.cancel_button = QPushButton("취소")
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.ok_button)
+        btn_layout.addWidget(self.cancel_button)
+
+        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.combo)
+        self.layout.addLayout(btn_layout)
+        self.setLayout(self.layout)
+        self.apply_custom_styles()
+
+    def apply_custom_styles(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 12px;
+            }
+
+            QComboBox {
+                background-color: #3b3b3b;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                color: #f0f0f0;
+            }
+
+            QPushButton {
+                background-color: #0078d7;
+                color: white;
+                border-radius: 6px;
+                padding: 10px;
+                font-weight: bold;
+            }
+
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+
+            QLabel {
+                font-size: 13px;
+                font-weight: bold;
+                color: #f0f0f0;
+            }
+        """)
+
+    def get_selected_account(self):
+        index = self.combo.currentIndex()
+        return self.combo.itemData(index)
+
+class MemberManagementDialog(QDialog):
+    def __init__(self, group_name, members, account_info):
+        super().__init__()
+        self.group_name = group_name
+        self.members = members
+        self.account_info = account_info
+        self.setWindowTitle(f"멤버 관리 - {group_name}")
+        self.resize(400, 150)
+        self.layout = QVBoxLayout()
+        self.apply_custom_styles()
+
+        self.is_manual_input = False
+
+        self.info_label = QLabel("1. 사용자 이름, 사원번호, 이메일 중 입력 \n2. 여러 명인 경우 콤마(,)로 구분")
+        self.info_label.setStyleSheet("font-size: 12px; color: gray;")
+
+        self.member_combo_label = QLabel("사용자:")
+        self.member_combo = QComboBox()
+        self.member_combo.setEditable(True)
+        self.member_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.member_combo.addItem("")
+        self.member_combo.addItems([f"{member[1]} ({member[0]}, {member[2]})" for member in members])
+
+        completer = QCompleter()
+        completer.setCompletionMode(QCompleter.CompletionMode(0))
+        self.member_combo.setCompleter(completer)
+
+        self.member_combo.lineEdit().textEdited.connect(self.handle_manual_input)
+
+        self.member_combo.activated.connect(self.populate_display_name)
+
+        self.add_member_button = QPushButton("멤버 추가")
+        self.remove_member_button = QPushButton("멤버 제거")
+
+        self.layout.addWidget(self.info_label)
+        self.layout.addWidget(self.member_combo_label)
+        self.layout.addWidget(self.member_combo)
+        self.layout.addWidget(self.add_member_button)
+        self.layout.addWidget(self.remove_member_button)
+
+        self.add_member_button.clicked.connect(self.add_member)
+        self.remove_member_button.clicked.connect(self.remove_member)
+        self.setLayout(self.layout)
+        self.progress_dialog = None
+
+    def apply_custom_styles(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 12px;
+            }
+
+            QComboBox {
+                background-color: #3b3b3b;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                color: #f0f0f0;
+            }
+
+            QPushButton {
+                background-color: #0078d7;
+                color: white;
+                border-radius: 6px;
+                padding: 10px;
+                font-weight: bold;
+            }
+
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+
+            QLabel {
+                font-size: 13px;
+                font-weight: bold;
+                color: #f0f0f0;
+            }
+        """)
+
+    def handle_manual_input(self, text):
+        """사용자가 직접 입력 시 자동 채우기 비활성화"""
+        self.is_manual_input = True
+
+    def populate_display_name(self):
+        """콤보박스에서 항목을 선택했을 때만 자동으로 입력 필드 채우기"""
+        if not self.is_manual_input:
+            selected_text = self.member_combo.currentText()
+            if selected_text:
+                match = re.match(r'^(.*?) \(', selected_text)
+                if match:
+                    display_name = match.group(1).strip()
+                    self.member_combo.setEditText(display_name)
+        else:
+            self.is_manual_input = False
+
+    def run_powershell_command(self, command):
+        try:
+            subprocess.run(
+                ["powershell", "-Command", command],
+                check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            QMessageBox.information(self, "성공", "성공적으로 실행되었습니다.")
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "오류", f"실행에 실패했습니다.\n{str(e)}")
+
+    def resolve_identifier(self, identifier):
+        server_uri = f"ldap://{self.account_info['server_ip']}"
+        try:
+            with ldap3.Connection(server_uri, user=self.account_info['user'],
+                                  password=self.account_info['password'], auto_bind=True) as conn:
+
+                escaped_identifier = escape_filter_chars(identifier)
+
+                search_filter = (
+                    f"(|"
+                    f"(displayName=*{escaped_identifier}*)"
+                    f"(sAMAccountName=*{escaped_identifier}*)"
+                    f"(mail=*{escaped_identifier}*)"
+                    f")"
+                )
+
+                try:
+                    conn.search(
+                        search_base="DC=lskglobal,DC=com",
+                        search_filter=search_filter,
+                        attributes=["sAMAccountName", "displayName", "mail"]
+                    )
+                except LDAPInvalidFilterError as e:
+                    QMessageBox.critical(
+                        self,
+                        "LDAP 오류",
+                        f"잘못된 필터: {search_filter}\n{str(e)}"
+                    )
+                    return None
+
+                if conn.entries:
+                    if len(conn.entries) == 1:
+                        return conn.entries[0]["sAMAccountName"].value
+                    else:
+                        dialog = AccountSelectionDialog(conn.entries, self)
+                        if dialog.exec_() == QDialog.Accepted:
+                            return dialog.get_selected_account()
+                        else:
+                            QMessageBox.information(
+                                self,
+                                "취소",
+                                "계정 선택이 취소되었습니다."
+                            )
+                            return None
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "오류",
+                        "사용자를 찾을 수 없습니다."
+                    )
+                    return None
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "LDAP 오류",
+                f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}"
+            )
+            return None
+
+    def add_member(self):
+        identifiers = self.member_combo.currentText().strip().split(',')
+        identifiers = [identifier.strip() for identifier in identifiers if identifier.strip()]
+
+        if not identifiers:
+            QMessageBox.warning(self, "경고", "추가할 사용자를 입력하세요.")
+            return
+
+        resolved_list = []
+        for identifier in identifiers:
+            resolved = self.resolve_identifier(identifier)
+            if resolved is not None:
+                resolved_list.append((identifier, resolved))
+
+        if not resolved_list:
+            QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
+            return
+
+        self.progress_dialog = QProgressDialog("사용자 추가 중...", "취소", 0, len(resolved_list), self)
+        self.progress_dialog.setWindowTitle("진행 상황")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+
+        success_count = 0
+        for index, (orig_identifier, resolved_id) in enumerate(resolved_list, start=1):
+            if self.progress_dialog.wasCanceled():
+                QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
+                return
+
+            command = f"Add-ADGroupMember -Identity '{self.group_name}' -Members '{resolved_id}'"
+            try:
+                subprocess.run(
+                    ["powershell", "-Command", command],
+                    check=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                success_count += 1
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"{orig_identifier} 추가 중 오류 발생:\n{str(e)}")
+
+            self.progress_dialog.setValue(index)
+            self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 추가 중...")
+            QApplication.processEvents()
+
+        self.progress_dialog.close()
+        QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 추가 작업이 완료되었습니다.")
+
+    def remove_member(self):
+        identifiers = self.member_combo.currentText().strip().split(',')
+        identifiers = [identifier.strip() for identifier in identifiers if identifier.strip()]
+
+        if not identifiers:
+            QMessageBox.warning(self, "경고", "제거할 사용자를 입력하세요.")
+            return
+
+        resolved_list = []
+        for identifier in identifiers:
+            resolved = self.resolve_identifier(identifier)
+            if resolved is not None:
+                resolved_list.append((identifier, resolved))
+
+        if not resolved_list:
+            QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
+            return
+
+        self.progress_dialog = QProgressDialog("사용자 제거 중...", "취소", 0, len(resolved_list), self)
+        self.progress_dialog.setWindowTitle("진행 상황")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+
+        success_count = 0
+        for index, (orig_identifier, resolved_id) in enumerate(resolved_list, start=1):
+            if self.progress_dialog.wasCanceled():
+                QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
+                return
+
+            command = f"Remove-ADGroupMember -Identity '{self.group_name}' -Members '{resolved_id}' -Confirm:$false"
+            try:
+                subprocess.run(
+                    ["powershell", "-Command", command],
+                    check=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                success_count += 1
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"{orig_identifier} 제거 중 오류 발생:\n{str(e)}")
+
+            self.progress_dialog.setValue(index)
+            self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 제거 중...")
+            QApplication.processEvents()
+
+        self.progress_dialog.close()
+        QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 제거 작업이 완료되었습니다.")
+
+class CreateGroupDialog(QDialog):
+    def __init__(self, group_name="", account_info=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("새 그룹 생성")
+        self.setGeometry(100, 100, 350, 200)
+
+        self.account_info = account_info
+        self.layout = QVBoxLayout()
+
+        self.name_label = QLabel("그룹 이름:")
+        self.name_input = QLineEdit()
+        self.name_input.setText(group_name)
+
+        self.desc_label = QLabel("그룹 설명:")
+        self.desc_input = QLineEdit()
+
+        self.security_group_button = QPushButton("보안 그룹")
+        self.mail_group_button = QPushButton("그룹 메일")
+
+        self.scope_label = QLabel("그룹 범위:")
+        self.scope_combo = QComboBox()
+        self.scope_combo.addItems(["도메인 로컬", "글로벌", "유니버설"])
+
+        self.type_label = QLabel("그룹 종류:")
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["보안", "배포"])
+
+        self.create_button = QPushButton("생성")
+        self.cancel_button = QPushButton("취소")
+
+        self.create_button.clicked.connect(self.create_group)
+        self.cancel_button.clicked.connect(self.reject)
+        
+        self.security_group_button.clicked.connect(lambda: self.set_group_type("도메인 로컬", "보안"))
+        self.mail_group_button.clicked.connect(lambda: self.set_group_type("유니버설", "배포"))
+
+        form_layout = QFormLayout()
+        form_layout.addRow(self.name_label, self.name_input)
+        form_layout.addRow(self.desc_label, self.desc_input)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.security_group_button)
+        button_layout.addWidget(self.mail_group_button)
+
+        detail_layout = QFormLayout()
+        detail_layout.addRow(self.scope_label, self.scope_combo)
+        detail_layout.addRow(self.type_label, self.type_combo)
+
+        bottom_button_layout = QHBoxLayout()
+        bottom_button_layout.addWidget(self.create_button)
+        bottom_button_layout.addWidget(self.cancel_button)
+
+        self.layout.addLayout(form_layout)
+        self.layout.addLayout(button_layout)
+        self.layout.addLayout(detail_layout)
+        self.layout.addLayout(bottom_button_layout)
+
+        self.setLayout(self.layout)
+        self.center()
+
+    def center(self):
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            self.move(screen_geometry.center() - self.rect().center())
+
+    def set_group_type(self, scope, group_type):
+        self.scope_combo.setCurrentText(scope)
+        self.type_combo.setCurrentText(group_type)
+
+    def create_group(self):
+        group_name = self.name_input.text().strip()
+        group_desc = self.desc_input.text().strip()
+        group_scope = self.scope_combo.currentText()
+        group_type = self.type_combo.currentText()
+
+        server_ip = self.account_info.get('server_ip', '').strip()
+        if not server_ip:
+            QMessageBox.critical(self, "오류", "AD 서버 IP가 입력되지 않았습니다.\n관리자 계정 관리에서 설정해 주세요.")
+            return
+
+        if not group_name:
+            QMessageBox.warning(self, "경고", "그룹 이름을 입력하세요.")
+            return
+
+        if self.check_group_exists(group_name):
+            QMessageBox.warning(self, "경고", f"'{group_name}' 그룹은 이미 존재합니다.")
+            return
+
+        scope_mapping = {"도메인 로컬": "DomainLocal", "글로벌": "Global", "유니버설": "Universal"}
+        type_mapping = {"보안": "Security", "배포": "Distribution"}
+
+        scope_english = scope_mapping.get(group_scope, "Global")
+        type_english = type_mapping.get(group_type, "Security")
+
+        if scope_english == "Universal" and type_english == "Distribution":
+            group_name = group_name.lower()
+
+        command = (
+            f"New-ADGroup -Name '{group_name}' "
+            f"-SamAccountName '{group_name}' "
+            f"-GroupScope '{scope_english}' -GroupCategory '{type_english}' "
+            f"-Description '{group_desc}' -Path 'OU=Users,OU=lskglobal,DC=lskglobal,DC=com'"
+        )
+
+        if type_english == "Distribution" and scope_english == "Universal":
+            command += f" -DisplayName '{group_name}' -OtherAttributes @{{'mail'='{group_name}'}}"
+            command += f"; Set-ADGroup -Identity '{group_name}' -add @{{'msExchHideFromAddressLists'=$true; 'msExchRequireAuthToSendTo'=$False}}"
+
+        try:
+            subprocess.run(
+                ["powershell", "-Command", command],
+                check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            
+            self.accept()
+            
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "오류", f"그룹 생성 중 오류 발생:\n{str(e)}")
+
+    def check_group_exists(self, group_name):
+        server_ip = self.account_info.get('server_ip', '').strip()
+        if not server_ip:
+            QMessageBox.critical(self, "오류", "AD 서버 정보가 설정되지 않았습니다.")
+            return False
+
+        server_uri = f"ldap://{server_ip}"
+        search_filter = f"(cn={group_name})"
+
+        try:
+            with ldap3.Connection(server_uri, user=self.account_info['user'], password=self.account_info['password'], auto_bind=True) as conn:
+                conn.search(search_base="DC=lskglobal,DC=com", search_filter=search_filter, attributes=["cn"])
+                return len(conn.entries) > 0
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"AD 조회 중 오류 발생:\n{str(e)}")
+            return False
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = ADGroupViewer()
+    ex.show()
+    sys.exit(app.exec_())
