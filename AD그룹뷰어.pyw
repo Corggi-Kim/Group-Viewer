@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QLineEdit, QAbstractItemView,
     QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QFormLayout, QGridLayout,
     QMessageBox, QComboBox, QProgressDialog, QHBoxLayout, QFileDialog, QInputDialog, QCompleter,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QScrollArea
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
@@ -934,13 +934,178 @@ class MemberManagementDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
 
-    def remove_member(self):
-        identifiers = self.member_combo.currentText().strip().split(',')
-        identifiers = [identifier.strip() for identifier in identifiers if identifier.strip()]
 
-        if not identifiers:
-            QMessageBox.warning(self, "경고", "제거할 사용자를 입력하세요.")
+class AddParentGroupsDialog(QDialog):
+    def __init__(self, account_info, parent=None):
+        super().__init__(parent)
+        self.account_info = account_info
+        self.setWindowTitle("소속 그룹 추가")
+        self.resize(480, 180)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("추가할 그룹 메일 주소(여러 개는 콤마로 구분):"))
+        self.mail_input = QLineEdit()
+        self.mail_input.setPlaceholderText("group1@..., group2@...")
+        layout.addWidget(self.mail_input)
+
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("추가")
+        self.cancel_button = QPushButton("취소")
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+
+    def get_mails(self):
+        raw = self.mail_input.text().strip()
+        return [v.strip() for v in raw.split(",") if v.strip()]
+
+
+class RemoveParentGroupsDialog(QDialog):
+    def __init__(self, groups, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("소속 그룹 삭제")
+        self.resize(520, 420)
+        self.groups = groups
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("삭제할 소속 그룹을 선택하세요(다중 선택 가능):"))
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.MultiSelection)
+        for group in groups:
+            item = QListWidgetItem(group.get("display", group.get("dn", "")))
+            item.setData(Qt.UserRole, group.get("dn", ""))
+            self.list_widget.addItem(item)
+        layout.addWidget(self.list_widget)
+
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("삭제")
+        self.cancel_button = QPushButton("취소")
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+
+    def get_selected_dns(self):
+        items = self.list_widget.selectedItems()
+        return [item.data(Qt.UserRole) for item in items]
+
+
+class GroupManagementDialog(QDialog):
+    def __init__(self, group_name, account_info, parent=None):
+        super().__init__(parent)
+        self.group_name = group_name
+        self.account_info = account_info
+        self.group_dn = ""
+        self.parent_groups = []
+
+        self.setWindowTitle(f"그룹 관리 - {group_name}")
+        self.resize(700, 520)
+
+        self.layout = QVBoxLayout()
+        self.group_info_label = QLabel("그룹 설명")
+        self.desc_input = QLineEdit()
+        self.save_desc_button = QPushButton("설명 저장")
+
+        self.parent_group_label = QLabel("소속 그룹")
+        self.parent_group_list = QListWidget()
+        self.parent_group_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.parent_group_list.setMinimumHeight(260)
+        self.add_parent_button = QPushButton("소속 그룹 추가")
+        self.remove_parent_button = QPushButton("소속 그룹 삭제")
+
+        desc_layout = QHBoxLayout()
+        desc_layout.addWidget(self.desc_input)
+        desc_layout.addWidget(self.save_desc_button)
+
+        parent_btn_layout = QHBoxLayout()
+        parent_btn_layout.addWidget(self.add_parent_button)
+        parent_btn_layout.addWidget(self.remove_parent_button)
+        parent_btn_layout.addStretch()
+
+        self.layout.addWidget(self.group_info_label)
+        self.layout.addLayout(desc_layout)
+        self.layout.addSpacing(10)
+        self.layout.addWidget(self.parent_group_label)
+        self.layout.addWidget(self.parent_group_list)
+        self.layout.addLayout(parent_btn_layout)
+        self.setLayout(self.layout)
+
+        self.save_desc_button.clicked.connect(self.save_description)
+        self.add_parent_button.clicked.connect(self.add_parent_groups)
+        self.remove_parent_button.clicked.connect(self.remove_parent_groups)
+
+        self.load_group_info()
+
+    def get_connection(self):
+        server_uri = f"ldap://{self.account_info['server_ip']}"
+        return ldap3.Connection(
+            server_uri,
+            user=self.account_info['user'],
+            password=self.account_info['password'],
+            auto_bind=True
+        )
+
+    def load_group_info(self):
+        try:
+            with self.get_connection() as conn:
+                filter_group = escape_filter_chars(self.group_name)
+                conn.search(
+                    search_base="DC=lskglobal,DC=com",
+                    search_filter=f"(|(cn={filter_group})(displayName={filter_group}))",
+                    attributes=["distinguishedName", "description", "memberOf", "cn", "mail"]
+                )
+                if not conn.entries:
+                    QMessageBox.warning(self, "경고", "그룹을 찾을 수 없습니다.")
+                    self.reject()
+                    return
+
+                group_entry = conn.entries[0]
+                self.group_dn = group_entry.entry_dn
+                description = group_entry["description"].value if "description" in group_entry else ""
+                self.desc_input.setText(description if description else "")
+
+                member_of_dns = [str(v) for v in group_entry["memberOf"]] if "memberOf" in group_entry else []
+                self.parent_groups = []
+                self.parent_group_list.clear()
+                if member_of_dns:
+                    dn_filter = "".join(f"(distinguishedName={escape_filter_chars(dn)})" for dn in member_of_dns)
+                    conn.search(
+                        search_base="DC=lskglobal,DC=com",
+                        search_filter=f"(|{dn_filter})",
+                        attributes=["cn", "mail", "distinguishedName"]
+                    )
+                    detail_map = {entry.entry_dn: entry for entry in conn.entries}
+                    for parent_dn in member_of_dns:
+                        info = detail_map.get(parent_dn)
+                        cn = info["cn"].value if info and "cn" in info else parent_dn
+                        mail = info["mail"].value if info and "mail" in info else ""
+                        display = f"{cn} ({mail})" if mail else cn
+                        self.parent_groups.append({"dn": parent_dn, "display": display})
+                        self.parent_group_list.addItem(display)
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"그룹 정보 조회 실패:\n{str(e)}")
+            self.reject()
+
+    def save_description(self):
+        if not self.group_dn:
             return
+        new_desc = self.desc_input.text().strip()
+        try:
+            with self.get_connection() as conn:
+                conn.modify(self.group_dn, {"description": [(ldap3.MODIFY_REPLACE, [new_desc])]})
+                if conn.result.get("result") == 0:
+                    QMessageBox.information(self, "성공", "그룹 설명이 저장되었습니다.")
+                else:
+                    QMessageBox.critical(self, "실패", f"설명 저장 실패:\n{conn.result}")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"설명 저장 실패:\n{str(e)}")
 
         server_uri = f"ldap://{self.account_info['server_ip']}"
         try:
@@ -1010,6 +1175,15 @@ class MemberBrowseDialog(QDialog):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("사원번호 / 이름 / 메일 / 부서 검색")
         self.search_input.setClearButtonEnabled(True)
+        self.tag_scroll = QScrollArea()
+        self.tag_scroll.setWidgetResizable(True)
+        self.tag_scroll.setFixedHeight(56)
+        self.tag_widget = QWidget()
+        self.tag_layout = QHBoxLayout()
+        self.tag_layout.setContentsMargins(6, 6, 6, 6)
+        self.tag_layout.setSpacing(6)
+        self.tag_widget.setLayout(self.tag_layout)
+        self.tag_scroll.setWidget(self.tag_widget)
         self.user_table = QTableWidget()
         self.user_table.setColumnCount(4)
         self.user_table.setHorizontalHeaderLabels(["사원 번호", "부서", "표시 이름", "메일 주소"])
@@ -1028,6 +1202,7 @@ class MemberBrowseDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
 
         self.layout.addWidget(QLabel("사용자 검색"))
+        self.layout.addWidget(self.tag_scroll)
         self.layout.addWidget(self.search_input)
         self.layout.addWidget(self.user_table)
         self.layout.addLayout(button_layout)
@@ -1037,9 +1212,20 @@ class MemberBrowseDialog(QDialog):
         self.search_input.textEdited.connect(self.filter_table)
         self.search_input.returnPressed.connect(lambda: self.filter_table(self.search_input.text()))
         self.search_input.installEventFilter(self)
+        self.user_table.itemSelectionChanged.connect(self.update_selected_tags)
         self.select_button.clicked.connect(self.accept_selection)
         self.cancel_button.clicked.connect(self.reject)
+        self.select_button.setAutoDefault(False)
+        self.select_button.setDefault(False)
+        self.cancel_button.setAutoDefault(False)
+        self.cancel_button.setDefault(False)
+        self.last_search_text = ""
+        self.search_poll_timer = QtCore.QTimer(self)
+        self.search_poll_timer.setInterval(120)
+        self.search_poll_timer.timeout.connect(self.poll_search_text)
+        self.search_poll_timer.start()
         self.load_users()
+        self.update_selected_tags()
 
     def make_center_item(self, value):
         item = QTableWidgetItem(str(value) if value is not None else "")
@@ -1095,6 +1281,10 @@ class MemberBrowseDialog(QDialog):
             self.user_table.setRowHidden(row, not show)
 
     def eventFilter(self, obj, event):
+        if obj is self.search_input and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self.filter_table(self.search_input.text())
+                return True
         if obj is self.search_input and event.type() in (QtCore.QEvent.KeyRelease, QtCore.QEvent.InputMethod):
             QtCore.QTimer.singleShot(0, lambda: self.filter_table(self.search_input.text()))
         return super().eventFilter(obj, event)
@@ -1126,6 +1316,39 @@ class MemberBrowseDialog(QDialog):
 
     def get_selected_ids(self):
         return self.selected_ids
+
+    def poll_search_text(self):
+        current_text = self.search_input.text()
+        if current_text != self.last_search_text:
+            self.last_search_text = current_text
+            self.filter_table(current_text)
+
+    def update_selected_tags(self):
+        while self.tag_layout.count():
+            item = self.tag_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        selected_rows = self.user_table.selectionModel().selectedRows()
+        if not selected_rows:
+            placeholder = QLabel("선택된 사용자가 여기에 표시됩니다.")
+            placeholder.setStyleSheet("color: #aaaaaa; padding: 4px;")
+            self.tag_layout.addWidget(placeholder)
+            self.tag_layout.addStretch()
+            return
+
+        for row_idx in selected_rows:
+            row = row_idx.row()
+            emp = self.user_table.item(row, 0).text() if self.user_table.item(row, 0) else ""
+            name = self.user_table.item(row, 2).text() if self.user_table.item(row, 2) else ""
+            tag = QLabel(f"{name} ({emp})")
+            tag.setStyleSheet(
+                "background-color:#3d7eff; color:white; border-radius:10px; "
+                "padding:4px 10px; font-size:11px;"
+            )
+            self.tag_layout.addWidget(tag)
+        self.tag_layout.addStretch()
 
 
 class AddParentGroupsDialog(QDialog):
