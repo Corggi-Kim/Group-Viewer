@@ -719,13 +719,16 @@ class MemberManagementDialog(QDialog):
         self.add_member_button.setMinimumHeight(36)
         self.remove_member_button.setMinimumHeight(36)
         self.browse_button.setMinimumHeight(36)
+        self.browse_button.setMinimumWidth(110)
+        self.add_member_button.setMinimumWidth(110)
+        self.remove_member_button.setMinimumWidth(110)
 
         self.layout.addWidget(self.info_label)
         self.layout.addWidget(self.member_combo_label)
         self.layout.addWidget(self.member_combo)
         button_row = QHBoxLayout()
-        button_row.addWidget(self.browse_button, 2)
-        button_row.addWidget(self.add_member_button, 3)
+        button_row.addWidget(self.browse_button, 1)
+        button_row.addWidget(self.add_member_button, 1)
         button_row.addWidget(self.remove_member_button, 1)
         self.layout.addLayout(button_row)
 
@@ -1006,6 +1009,7 @@ class MemberBrowseDialog(QDialog):
         self.layout = QVBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("사원번호 / 이름 / 메일 / 부서 검색")
+        self.search_input.setClearButtonEnabled(True)
         self.user_table = QTableWidget()
         self.user_table.setColumnCount(4)
         self.user_table.setHorizontalHeaderLabels(["사원 번호", "부서", "표시 이름", "메일 주소"])
@@ -1030,6 +1034,9 @@ class MemberBrowseDialog(QDialog):
         self.setLayout(self.layout)
 
         self.search_input.textChanged.connect(self.filter_table)
+        self.search_input.textEdited.connect(self.filter_table)
+        self.search_input.returnPressed.connect(lambda: self.filter_table(self.search_input.text()))
+        self.search_input.installEventFilter(self)
         self.select_button.clicked.connect(self.accept_selection)
         self.cancel_button.clicked.connect(self.reject)
         self.load_users()
@@ -1083,6 +1090,11 @@ class MemberBrowseDialog(QDialog):
                     show = True
                     break
             self.user_table.setRowHidden(row, not show)
+
+    def eventFilter(self, obj, event):
+        if obj is self.search_input and event.type() in (QtCore.QEvent.KeyRelease, QtCore.QEvent.InputMethod):
+            QtCore.QTimer.singleShot(0, lambda: self.filter_table(self.search_input.text()))
+        return super().eventFilter(obj, event)
 
     def accept_selection(self):
         rows = self.user_table.selectionModel().selectedRows()
