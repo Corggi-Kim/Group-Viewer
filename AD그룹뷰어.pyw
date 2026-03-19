@@ -733,8 +733,8 @@ class MemberManagementDialog(QDialog):
         self.layout.addLayout(button_row)
 
         self.browse_button.clicked.connect(self.open_member_browse)
-        self.add_member_button.clicked.connect(self.add_member)
-        self.remove_member_button.clicked.connect(self.remove_member)
+        self.add_member_button.clicked.connect(lambda: self.add_member())
+        self.remove_member_button.clicked.connect(lambda: self.remove_member())
         self.setLayout(self.layout)
         self.progress_dialog = None
 
@@ -933,7 +933,6 @@ class MemberManagementDialog(QDialog):
                 QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 추가 작업이 완료되었습니다.")
         except Exception as e:
             QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
-
 
 class AddParentGroupsDialog(QDialog):
     def __init__(self, account_info, parent=None):
