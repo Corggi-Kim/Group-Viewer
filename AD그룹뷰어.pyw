@@ -1086,15 +1086,33 @@ class MemberBrowseDialog(QDialog):
             show = False
             for col in range(self.user_table.columnCount()):
                 item = self.user_table.item(row, col)
-                if item and keyword in item.text().lower():
-                    show = True
-                    break
+                if item:
+                    item_text = item.text().lower()
+                    initials = self.extract_korean_initials(item_text)
+                    if keyword in item_text or (keyword and keyword in initials):
+                        show = True
+                        break
             self.user_table.setRowHidden(row, not show)
 
     def eventFilter(self, obj, event):
         if obj is self.search_input and event.type() in (QtCore.QEvent.KeyRelease, QtCore.QEvent.InputMethod):
             QtCore.QTimer.singleShot(0, lambda: self.filter_table(self.search_input.text()))
         return super().eventFilter(obj, event)
+
+    def extract_korean_initials(self, text):
+        choseong = [
+            "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
+            "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+        ]
+        result = []
+        for ch in text:
+            code = ord(ch)
+            if 0xAC00 <= code <= 0xD7A3:
+                index = (code - 0xAC00) // 588
+                result.append(choseong[index])
+            else:
+                result.append(ch)
+        return "".join(result)
 
     def accept_selection(self):
         rows = self.user_table.selectionModel().selectedRows()
