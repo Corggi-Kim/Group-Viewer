@@ -9,7 +9,8 @@ import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QLineEdit, QAbstractItemView,
     QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QFormLayout, QGridLayout,
-    QMessageBox, QComboBox, QProgressDialog, QHBoxLayout, QFileDialog, QInputDialog, QCompleter
+    QMessageBox, QComboBox, QProgressDialog, QHBoxLayout, QFileDialog, QInputDialog, QCompleter,
+    QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
@@ -150,15 +151,19 @@ class ADGroupViewer(QWidget):
 
         management_layout = QHBoxLayout()
         self.account_button = QPushButton('AD 서버 정보')
+        self.group_manage_button = QPushButton('그룹 관리')
         self.manage_members_button = QPushButton('멤버 관리')
         self.sync_button = QPushButton('동기화')
 
         self.account_button.setFixedSize(150, 45)
+        self.group_manage_button.setFixedSize(150, 45)
         self.manage_members_button.setFixedSize(150, 45)
         self.sync_button.setFixedSize(150, 45)
 
         management_layout.addStretch()
         management_layout.addWidget(self.account_button)
+        management_layout.addSpacing(20)
+        management_layout.addWidget(self.group_manage_button)
         management_layout.addSpacing(20)
         management_layout.addWidget(self.manage_members_button)
         management_layout.addSpacing(20)
@@ -176,6 +181,7 @@ class ADGroupViewer(QWidget):
         self.member_table.verticalHeader().setDefaultSectionSize(40)
         self.member_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.member_table.verticalHeader().setVisible(False)
+        self.member_table.setSortingEnabled(True)
 
         self.result_text = QTextEdit()
         self.result_text.setFixedHeight(150)
@@ -194,8 +200,14 @@ class ADGroupViewer(QWidget):
         self.copy_button.clicked.connect(self.copy_all_members)
         self.save_button.clicked.connect(self.save_member_list)
         self.account_button.clicked.connect(self.open_account_management)
+        self.group_manage_button.clicked.connect(self.open_group_management)
         self.manage_members_button.clicked.connect(self.open_member_management)
         self.sync_button.clicked.connect(self.execute_sync_script)
+
+    def make_center_item(self, value):
+        item = QTableWidgetItem(str(value) if value is not None else "")
+        item.setTextAlignment(Qt.AlignCenter)
+        return item
 
     def center_on_parent(self, dialog):
         parent_geometry = self.geometry()
@@ -366,6 +378,27 @@ class ADGroupViewer(QWidget):
             new_server_ip, new_user, new_password = dialog.get_account_info()
             self.save_account_info(new_server_ip, new_user, new_password)
 
+    def open_group_management(self):
+        try:
+            group_name = self.group_input.text().strip()
+            server_ip = self.account_info.get('server_ip', '').strip()
+            user = self.account_info.get('user', '').strip()
+            password = self.account_info.get('password', '').strip()
+
+            if not server_ip or not user or not password:
+                QMessageBox.critical(self, "오류", "AD 서버 정보가 입력되지 않았습니다.\n관리자 계정 관리에서 설정해 주세요.")
+                return
+
+            if not group_name:
+                QMessageBox.warning(self, "경고", "그룹 이름을 먼저 검색해 주세요.")
+                return
+
+            dialog = GroupManagementDialog(group_name, self.account_info, self)
+            self.center_on_parent(dialog)
+            dialog.exec_()
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"그룹 관리 열기 중 오류 발생:\n{str(e)}")
+
     def open_member_management(self):
         try:
             group_name = self.group_input.text().strip()
@@ -413,6 +446,7 @@ class ADGroupViewer(QWidget):
         server_uri = f"ldap://{server_ip}"
         self.member_list = []
         self.member_table.clearSpans()
+        self.member_table.setSortingEnabled(False)
         self.member_table.setRowCount(0)
 
         try:
@@ -462,16 +496,16 @@ class ADGroupViewer(QWidget):
                             department = user_attributes["department"][0] if "department" in user_attributes else ""
                             displayName = user_attributes["displayName"][0] if "displayName" in user_attributes else ""
                             mail = user_attributes["mail"][0] if "mail" in user_attributes else ""
-                            self.member_table.setItem(i, 0, QTableWidgetItem(sAMAccountName))
-                            self.member_table.setItem(i, 1, QTableWidgetItem(department))
-                            self.member_table.setItem(i, 2, QTableWidgetItem(displayName))
-                            self.member_table.setItem(i, 3, QTableWidgetItem(mail))
+                            self.member_table.setItem(i, 0, self.make_center_item(sAMAccountName))
+                            self.member_table.setItem(i, 1, self.make_center_item(department))
+                            self.member_table.setItem(i, 2, self.make_center_item(displayName))
+                            self.member_table.setItem(i, 3, self.make_center_item(mail))
                             self.member_list.append(MemberInfo(sAMAccountName, department, displayName, mail))
                         else:
-                            self.member_table.setItem(i, 0, QTableWidgetItem(""))
-                            self.member_table.setItem(i, 1, QTableWidgetItem(""))
-                            self.member_table.setItem(i, 2, QTableWidgetItem(""))
-                            self.member_table.setItem(i, 3, QTableWidgetItem(""))
+                            self.member_table.setItem(i, 0, self.make_center_item(""))
+                            self.member_table.setItem(i, 1, self.make_center_item(""))
+                            self.member_table.setItem(i, 2, self.make_center_item(""))
+                            self.member_table.setItem(i, 3, self.make_center_item(""))
                 else:
                     self.result_text.setPlainText("그룹을 찾을 수 없습니다.")
         except ldap3.core.exceptions.LDAPBindError as e:
@@ -483,7 +517,10 @@ class ADGroupViewer(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "오류", f"오류 발생: {str(e)}")
             return False
+        finally:
+            self.member_table.setSortingEnabled(True)
 
+        self.member_table.sortItems(0, Qt.AscendingOrder)
         return True
 
     def copy_all_members(self):
@@ -676,15 +713,23 @@ class MemberManagementDialog(QDialog):
 
         self.member_combo.activated.connect(self.populate_display_name)
 
+        self.browse_button = QPushButton("찾아보기")
         self.add_member_button = QPushButton("멤버 추가")
         self.remove_member_button = QPushButton("멤버 제거")
+        self.add_member_button.setMinimumHeight(36)
+        self.remove_member_button.setMinimumHeight(36)
+        self.browse_button.setMinimumHeight(36)
 
         self.layout.addWidget(self.info_label)
         self.layout.addWidget(self.member_combo_label)
         self.layout.addWidget(self.member_combo)
-        self.layout.addWidget(self.add_member_button)
-        self.layout.addWidget(self.remove_member_button)
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.browse_button, 2)
+        button_row.addWidget(self.add_member_button, 3)
+        button_row.addWidget(self.remove_member_button, 1)
+        self.layout.addLayout(button_row)
 
+        self.browse_button.clicked.connect(self.open_member_browse)
         self.add_member_button.clicked.connect(self.add_member)
         self.remove_member_button.clicked.connect(self.remove_member)
         self.setLayout(self.layout)
@@ -741,6 +786,18 @@ class MemberManagementDialog(QDialog):
                     self.member_combo.setEditText(display_name)
         else:
             self.is_manual_input = False
+
+    def open_member_browse(self):
+        dialog = MemberBrowseDialog(self.account_info, self)
+        if dialog.exec_() == QDialog.Accepted:
+            selected_ids = dialog.get_selected_ids()
+            if selected_ids:
+                existing_text = self.member_combo.currentText().strip()
+                if existing_text:
+                    merged = [existing_text] + selected_ids
+                else:
+                    merged = selected_ids
+                self.member_combo.setEditText(", ".join(merged))
 
     def run_powershell_command(self, command):
         try:
@@ -936,6 +993,354 @@ class MemberManagementDialog(QDialog):
                 QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 제거 작업이 완료되었습니다.")
         except Exception as e:
             QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
+
+
+class MemberBrowseDialog(QDialog):
+    def __init__(self, account_info, parent=None):
+        super().__init__(parent)
+        self.account_info = account_info
+        self.selected_ids = []
+        self.setWindowTitle("사용자 찾아보기")
+        self.resize(900, 600)
+
+        self.layout = QVBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("사원번호 / 이름 / 메일 / 부서 검색")
+        self.user_table = QTableWidget()
+        self.user_table.setColumnCount(4)
+        self.user_table.setHorizontalHeaderLabels(["사원 번호", "부서", "표시 이름", "메일 주소"])
+        self.user_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.user_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.user_table.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.user_table.verticalHeader().setVisible(False)
+        self.user_table.setSortingEnabled(True)
+
+        button_layout = QHBoxLayout()
+        self.select_button = QPushButton("선택")
+        self.cancel_button = QPushButton("취소")
+        button_layout.addStretch()
+        button_layout.addWidget(self.select_button)
+        button_layout.addWidget(self.cancel_button)
+
+        self.layout.addWidget(QLabel("사용자 검색"))
+        self.layout.addWidget(self.search_input)
+        self.layout.addWidget(self.user_table)
+        self.layout.addLayout(button_layout)
+        self.setLayout(self.layout)
+
+        self.search_input.textChanged.connect(self.filter_table)
+        self.select_button.clicked.connect(self.accept_selection)
+        self.cancel_button.clicked.connect(self.reject)
+        self.load_users()
+
+    def make_center_item(self, value):
+        item = QTableWidgetItem(str(value) if value is not None else "")
+        item.setTextAlignment(Qt.AlignCenter)
+        return item
+
+    def load_users(self):
+        server_uri = f"ldap://{self.account_info['server_ip']}"
+        try:
+            with ldap3.Connection(
+                server_uri,
+                user=self.account_info['user'],
+                password=self.account_info['password'],
+                auto_bind=True
+            ) as conn:
+                conn.search(
+                    search_base="OU=lskglobal,DC=lskglobal,DC=com",
+                    search_filter="(&(objectClass=user)(objectCategory=person))",
+                    attributes=["sAMAccountName", "department", "displayName", "mail"],
+                    paged_size=500
+                )
+                entries = conn.entries
+
+            self.user_table.setSortingEnabled(False)
+            self.user_table.setRowCount(len(entries))
+            for i, entry in enumerate(entries):
+                sAMAccountName = entry["sAMAccountName"].value if "sAMAccountName" in entry else ""
+                department = entry["department"].value if "department" in entry else ""
+                displayName = entry["displayName"].value if "displayName" in entry else ""
+                mail = entry["mail"].value if "mail" in entry else ""
+
+                self.user_table.setItem(i, 0, self.make_center_item(sAMAccountName))
+                self.user_table.setItem(i, 1, self.make_center_item(department))
+                self.user_table.setItem(i, 2, self.make_center_item(displayName))
+                self.user_table.setItem(i, 3, self.make_center_item(mail))
+            self.user_table.setSortingEnabled(True)
+            self.user_table.sortItems(0, Qt.AscendingOrder)
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"사용자 목록 조회 실패:\n{str(e)}")
+
+    def filter_table(self, text):
+        keyword = text.strip().lower()
+        for row in range(self.user_table.rowCount()):
+            show = False
+            for col in range(self.user_table.columnCount()):
+                item = self.user_table.item(row, col)
+                if item and keyword in item.text().lower():
+                    show = True
+                    break
+            self.user_table.setRowHidden(row, not show)
+
+    def accept_selection(self):
+        rows = self.user_table.selectionModel().selectedRows()
+        self.selected_ids = []
+        for row_idx in rows:
+            row = row_idx.row()
+            id_item = self.user_table.item(row, 0)
+            if id_item and id_item.text().strip():
+                self.selected_ids.append(id_item.text().strip())
+        self.accept()
+
+    def get_selected_ids(self):
+        return self.selected_ids
+
+
+class AddParentGroupsDialog(QDialog):
+    def __init__(self, account_info, parent=None):
+        super().__init__(parent)
+        self.account_info = account_info
+        self.setWindowTitle("소속 그룹 추가")
+        self.resize(480, 180)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("추가할 그룹 메일 주소(여러 개는 콤마로 구분):"))
+        self.mail_input = QLineEdit()
+        self.mail_input.setPlaceholderText("group1@..., group2@...")
+        layout.addWidget(self.mail_input)
+
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("추가")
+        self.cancel_button = QPushButton("취소")
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+
+    def get_mails(self):
+        raw = self.mail_input.text().strip()
+        return [v.strip() for v in raw.split(",") if v.strip()]
+
+
+class RemoveParentGroupsDialog(QDialog):
+    def __init__(self, groups, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("소속 그룹 삭제")
+        self.resize(520, 420)
+        self.groups = groups
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("삭제할 소속 그룹을 선택하세요(다중 선택 가능):"))
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.MultiSelection)
+        for group in groups:
+            item = QListWidgetItem(group.get("display", group.get("dn", "")))
+            item.setData(Qt.UserRole, group.get("dn", ""))
+            self.list_widget.addItem(item)
+        layout.addWidget(self.list_widget)
+
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("삭제")
+        self.cancel_button = QPushButton("취소")
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+
+    def get_selected_dns(self):
+        items = self.list_widget.selectedItems()
+        return [item.data(Qt.UserRole) for item in items]
+
+
+class GroupManagementDialog(QDialog):
+    def __init__(self, group_name, account_info, parent=None):
+        super().__init__(parent)
+        self.group_name = group_name
+        self.account_info = account_info
+        self.group_dn = ""
+        self.parent_groups = []
+
+        self.setWindowTitle(f"그룹 관리 - {group_name}")
+        self.resize(700, 520)
+
+        self.layout = QVBoxLayout()
+        self.group_info_label = QLabel("그룹 설명")
+        self.desc_input = QLineEdit()
+        self.save_desc_button = QPushButton("설명 저장")
+
+        self.parent_group_label = QLabel("소속 그룹")
+        self.parent_group_list = QListWidget()
+        self.parent_group_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.parent_group_list.setMinimumHeight(260)
+        self.add_parent_button = QPushButton("소속 그룹 추가")
+        self.remove_parent_button = QPushButton("소속 그룹 삭제")
+
+        desc_layout = QHBoxLayout()
+        desc_layout.addWidget(self.desc_input)
+        desc_layout.addWidget(self.save_desc_button)
+
+        parent_btn_layout = QHBoxLayout()
+        parent_btn_layout.addWidget(self.add_parent_button)
+        parent_btn_layout.addWidget(self.remove_parent_button)
+        parent_btn_layout.addStretch()
+
+        self.layout.addWidget(self.group_info_label)
+        self.layout.addLayout(desc_layout)
+        self.layout.addSpacing(10)
+        self.layout.addWidget(self.parent_group_label)
+        self.layout.addWidget(self.parent_group_list)
+        self.layout.addLayout(parent_btn_layout)
+        self.setLayout(self.layout)
+
+        self.save_desc_button.clicked.connect(self.save_description)
+        self.add_parent_button.clicked.connect(self.add_parent_groups)
+        self.remove_parent_button.clicked.connect(self.remove_parent_groups)
+
+        self.load_group_info()
+
+    def get_connection(self):
+        server_uri = f"ldap://{self.account_info['server_ip']}"
+        return ldap3.Connection(
+            server_uri,
+            user=self.account_info['user'],
+            password=self.account_info['password'],
+            auto_bind=True
+        )
+
+    def load_group_info(self):
+        try:
+            with self.get_connection() as conn:
+                filter_group = escape_filter_chars(self.group_name)
+                conn.search(
+                    search_base="DC=lskglobal,DC=com",
+                    search_filter=f"(|(cn={filter_group})(displayName={filter_group}))",
+                    attributes=["distinguishedName", "description", "memberOf", "cn", "mail"]
+                )
+                if not conn.entries:
+                    QMessageBox.warning(self, "경고", "그룹을 찾을 수 없습니다.")
+                    self.reject()
+                    return
+
+                group_entry = conn.entries[0]
+                self.group_dn = group_entry.entry_dn
+                description = group_entry["description"].value if "description" in group_entry else ""
+                self.desc_input.setText(description if description else "")
+
+                member_of_dns = [str(v) for v in group_entry["memberOf"]] if "memberOf" in group_entry else []
+                self.parent_groups = []
+                self.parent_group_list.clear()
+                if member_of_dns:
+                    dn_filter = "".join(f"(distinguishedName={escape_filter_chars(dn)})" for dn in member_of_dns)
+                    conn.search(
+                        search_base="DC=lskglobal,DC=com",
+                        search_filter=f"(|{dn_filter})",
+                        attributes=["cn", "mail", "distinguishedName"]
+                    )
+                    detail_map = {entry.entry_dn: entry for entry in conn.entries}
+                    for parent_dn in member_of_dns:
+                        info = detail_map.get(parent_dn)
+                        cn = info["cn"].value if info and "cn" in info else parent_dn
+                        mail = info["mail"].value if info and "mail" in info else ""
+                        display = f"{cn} ({mail})" if mail else cn
+                        self.parent_groups.append({"dn": parent_dn, "display": display})
+                        self.parent_group_list.addItem(display)
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"그룹 정보 조회 실패:\n{str(e)}")
+            self.reject()
+
+    def save_description(self):
+        if not self.group_dn:
+            return
+        new_desc = self.desc_input.text().strip()
+        try:
+            with self.get_connection() as conn:
+                conn.modify(self.group_dn, {"description": [(ldap3.MODIFY_REPLACE, [new_desc])]})
+                if conn.result.get("result") == 0:
+                    QMessageBox.information(self, "성공", "그룹 설명이 저장되었습니다.")
+                else:
+                    QMessageBox.critical(self, "실패", f"설명 저장 실패:\n{conn.result}")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"설명 저장 실패:\n{str(e)}")
+
+    def add_parent_groups(self):
+        dialog = AddParentGroupsDialog(self.account_info, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        mails = dialog.get_mails()
+        if not mails:
+            QMessageBox.warning(self, "경고", "추가할 메일 주소를 입력하세요.")
+            return
+
+        failed = []
+        success = 0
+        try:
+            with self.get_connection() as conn:
+                for mail in mails:
+                    escaped_mail = escape_filter_chars(mail)
+                    conn.search(
+                        search_base="DC=lskglobal,DC=com",
+                        search_filter=f"(mail={escaped_mail})",
+                        attributes=["distinguishedName", "cn"]
+                    )
+                    if not conn.entries:
+                        failed.append(f"{mail}: 메일 주소와 일치하는 그룹 없음")
+                        continue
+
+                    parent_dn = conn.entries[0].entry_dn
+                    result = conn.modify(parent_dn, {"member": [(ldap3.MODIFY_ADD, [self.group_dn])]})
+                    if result:
+                        success += 1
+                    else:
+                        failed.append(f"{mail}: {conn.result}")
+
+            self.load_group_info()
+            if failed:
+                QMessageBox.warning(self, "일부 실패", "\n".join(failed))
+            QMessageBox.information(self, "완료", f"{success}/{len(mails)}개 소속 그룹 추가 완료")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"소속 그룹 추가 실패:\n{str(e)}")
+
+    def remove_parent_groups(self):
+        if not self.parent_groups:
+            QMessageBox.information(self, "알림", "삭제할 소속 그룹이 없습니다.")
+            return
+
+        dialog = RemoveParentGroupsDialog(self.parent_groups, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        selected_dns = dialog.get_selected_dns()
+        if not selected_dns:
+            QMessageBox.warning(self, "경고", "삭제할 항목을 선택하세요.")
+            return
+
+        failed = []
+        success = 0
+        try:
+            with self.get_connection() as conn:
+                for parent_dn in selected_dns:
+                    result = conn.modify(parent_dn, {"member": [(ldap3.MODIFY_DELETE, [self.group_dn])]})
+                    if result:
+                        success += 1
+                    else:
+                        failed.append(f"{parent_dn}: {conn.result}")
+
+            self.load_group_info()
+            if failed:
+                QMessageBox.warning(self, "일부 실패", "\n".join(failed))
+            QMessageBox.information(self, "완료", f"{success}/{len(selected_dns)}개 소속 그룹 삭제 완료")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"소속 그룹 삭제 실패:\n{str(e)}")
+
 
 class CreateGroupDialog(QDialog):
     def __init__(self, group_name="", account_info=None, parent=None):
