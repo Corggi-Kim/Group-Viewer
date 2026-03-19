@@ -902,229 +902,27 @@ class MemberManagementDialog(QDialog):
                     QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
                     return
 
-                self.progress_dialog = QProgressDialog("사용자 추가 중...", "취소", 0, len(resolved_list), self)
-                self.progress_dialog.setWindowTitle("진행 상황")
-                self.progress_dialog.setWindowModality(Qt.WindowModal)
-                self.progress_dialog.setMinimumDuration(0)
-
-                success_count = 0
-                failed_identifiers = []
-                for index, (orig_identifier, user_dn) in enumerate(resolved_list, start=1):
-                    if self.progress_dialog.wasCanceled():
-                        QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
-                        return
-
-                    modify_result = conn.modify(
-                        group_dn,
-                        {"member": [(ldap3.MODIFY_ADD, [user_dn])]}
-                    )
-                    if modify_result:
-                        success_count += 1
-                    else:
-                        failed_identifiers.append(f"{orig_identifier}: {conn.result}")
-
-                    self.progress_dialog.setValue(index)
-                    self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 추가 중...")
-                    QApplication.processEvents()
-
-                self.progress_dialog.close()
+                success_count, failed_identifiers, canceled = self.run_member_modify(
+                    conn=conn,
+                    group_dn=group_dn,
+                    resolved_list=resolved_list,
+                    operation=ldap3.MODIFY_ADD,
+                    progress_title="사용자 추가 중..."
+                )
+                if canceled:
+                    return
                 if failed_identifiers:
                     QMessageBox.warning(self, "일부 실패", "다음 사용자 추가에 실패했습니다:\n" + "\n".join(failed_identifiers))
                 QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 추가 작업이 완료되었습니다.")
         except Exception as e:
             QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
 
-                    self.progress_dialog.setValue(index)
-                    self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 제거 중...")
-                    QApplication.processEvents()
+    def remove_member(self):
+        identifiers = self.member_combo.currentText().strip().split(',')
+        identifiers = [identifier.strip() for identifier in identifiers if identifier.strip()]
 
-                self.progress_dialog.close()
-                if failed_identifiers:
-                    QMessageBox.warning(self, "일부 실패", "다음 사용자 제거에 실패했습니다:\n" + "\n".join(failed_identifiers))
-                QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 제거 작업이 완료되었습니다.")
-        except Exception as e:
-            QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
-
-
-class MemberBrowseDialog(QDialog):
-    def __init__(self, account_info, parent=None):
-        super().__init__(parent)
-        self.account_info = account_info
-        self.selected_ids = []
-        self.setWindowTitle("사용자 찾아보기")
-        self.resize(900, 600)
-
-        self.layout = QVBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("사원번호 / 이름 / 메일 / 부서 검색")
-        self.search_input.setClearButtonEnabled(True)
-        self.tag_scroll = QScrollArea()
-        self.tag_scroll.setWidgetResizable(True)
-        self.tag_scroll.setFixedHeight(56)
-        self.tag_scroll.setStyleSheet("QScrollArea { border: 1px solid #444; background-color: #2b2b2b; }")
-        self.tag_widget = QWidget()
-        self.tag_layout = QHBoxLayout()
-        self.tag_layout.setContentsMargins(6, 6, 6, 6)
-        self.tag_layout.setSpacing(6)
-        self.tag_widget.setLayout(self.tag_layout)
-        self.tag_widget.setStyleSheet("background-color: #2b2b2b;")
-        self.tag_scroll.setWidget(self.tag_widget)
-        self.user_table = QTableWidget()
-        self.user_table.setColumnCount(4)
-        self.user_table.setHorizontalHeaderLabels(["사원 번호", "부서", "표시 이름", "메일 주소"])
-        self.user_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.user_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.user_table.setSelectionMode(QAbstractItemView.MultiSelection)
-        self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.user_table.verticalHeader().setVisible(False)
-        self.user_table.setSortingEnabled(True)
-        self.user_table.setStyleSheet(
-            "QTableWidget { background-color: #d9d9d9; color: #111; gridline-color: #bfbfbf; }"
-            "QHeaderView::section { background-color: #efefef; color: #111; }"
-        )
-
-        button_layout = QHBoxLayout()
-        self.select_button = QPushButton("선택")
-        self.cancel_button = QPushButton("취소")
-        button_layout.addStretch()
-        button_layout.addWidget(self.select_button)
-        button_layout.addWidget(self.cancel_button)
-
-        self.layout.addWidget(QLabel("사용자 검색"))
-        self.layout.addWidget(self.tag_scroll)
-        self.layout.addWidget(self.search_input)
-        self.layout.addWidget(self.user_table)
-        self.layout.addLayout(button_layout)
-        self.setLayout(self.layout)
-
-        self.search_input.textChanged.connect(self.filter_table)
-        self.search_input.textEdited.connect(self.filter_table)
-        self.search_input.returnPressed.connect(lambda: self.filter_table(self.search_input.text()))
-        self.search_input.installEventFilter(self)
-        self.user_table.itemSelectionChanged.connect(self.update_selected_tags)
-        self.select_button.clicked.connect(self.accept_selection)
-        self.cancel_button.clicked.connect(self.reject)
-        self.select_button.setAutoDefault(False)
-        self.select_button.setDefault(False)
-        self.cancel_button.setAutoDefault(False)
-        self.cancel_button.setDefault(False)
-        self.last_search_text = ""
-        self.search_poll_timer = QtCore.QTimer(self)
-        self.search_poll_timer.setInterval(120)
-        self.search_poll_timer.timeout.connect(self.poll_search_text)
-        self.search_poll_timer.start()
-        self.load_users()
-        self.update_selected_tags()
-
-    def make_center_item(self, value):
-        item = QTableWidgetItem(str(value) if value is not None else "")
-        item.setTextAlignment(Qt.AlignCenter)
-        return item
-
-    def load_users(self):
-        server_uri = f"ldap://{self.account_info['server_ip']}"
-        try:
-            with ldap3.Connection(
-                server_uri,
-                user=self.account_info['user'],
-                password=self.account_info['password'],
-                auto_bind=True
-            ) as conn:
-                conn.search(
-                    search_base="OU=lskglobal,DC=lskglobal,DC=com",
-                    search_filter="(&(objectClass=user)(objectCategory=person))",
-                    attributes=["sAMAccountName", "department", "displayName", "mail"],
-                    paged_size=500
-                )
-                entries = conn.entries
-
-            self.user_table.setSortingEnabled(False)
-            self.user_table.setRowCount(len(entries))
-            for i, entry in enumerate(entries):
-                sAMAccountName = entry["sAMAccountName"].value if "sAMAccountName" in entry else ""
-                department = entry["department"].value if "department" in entry else ""
-                displayName = entry["displayName"].value if "displayName" in entry else ""
-                mail = entry["mail"].value if "mail" in entry else ""
-
-                self.user_table.setItem(i, 0, self.make_center_item(sAMAccountName))
-                self.user_table.setItem(i, 1, self.make_center_item(department))
-                self.user_table.setItem(i, 2, self.make_center_item(displayName))
-                self.user_table.setItem(i, 3, self.make_center_item(mail))
-            self.user_table.setSortingEnabled(True)
-            self.user_table.sortItems(0, Qt.AscendingOrder)
-        except Exception as e:
-            QMessageBox.critical(self, "LDAP 오류", f"사용자 목록 조회 실패:\n{str(e)}")
-
-    def filter_table(self, text):
-        keyword = text.strip().lower()
-        for row in range(self.user_table.rowCount()):
-            show = False
-            for col in range(self.user_table.columnCount()):
-                item = self.user_table.item(row, col)
-                if item:
-                    item_text = item.text().lower()
-                    initials = self.extract_korean_initials(item_text)
-                    if keyword in item_text or (keyword and keyword in initials):
-                        show = True
-                        break
-            self.user_table.setRowHidden(row, not show)
-
-    def eventFilter(self, obj, event):
-        if obj is self.search_input and event.type() == QtCore.QEvent.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                self.filter_table(self.search_input.text())
-                return True
-        if obj is self.search_input and event.type() in (QtCore.QEvent.KeyRelease, QtCore.QEvent.InputMethod):
-            QtCore.QTimer.singleShot(0, lambda: self.filter_table(self.search_input.text()))
-        return super().eventFilter(obj, event)
-
-    def extract_korean_initials(self, text):
-        choseong = [
-            "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
-            "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
-        ]
-        result = []
-        for ch in text:
-            code = ord(ch)
-            if 0xAC00 <= code <= 0xD7A3:
-                index = (code - 0xAC00) // 588
-                result.append(choseong[index])
-            else:
-                result.append(ch)
-        return "".join(result)
-
-    def accept_selection(self):
-        rows = self.user_table.selectionModel().selectedRows()
-        self.selected_ids = []
-        for row_idx in rows:
-            row = row_idx.row()
-            id_item = self.user_table.item(row, 0)
-            if id_item and id_item.text().strip():
-                self.selected_ids.append(id_item.text().strip())
-        self.accept()
-
-    def get_selected_ids(self):
-        return self.selected_ids
-
-    def poll_search_text(self):
-        current_text = self.search_input.text()
-        if current_text != self.last_search_text:
-            self.last_search_text = current_text
-            self.filter_table(current_text)
-
-    def update_selected_tags(self):
-        while self.tag_layout.count():
-            item = self.tag_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
-        selected_rows = self.user_table.selectionModel().selectedRows()
-        if not selected_rows:
-            placeholder = QLabel("선택된 사용자가 여기에 표시됩니다.")
-            placeholder.setStyleSheet("color: #aaaaaa; padding: 4px;")
-            self.tag_layout.addWidget(placeholder)
-            self.tag_layout.addStretch()
+        if not identifiers:
+            QMessageBox.warning(self, "경고", "제거할 사용자를 입력하세요.")
             return
 
         server_uri = f"ldap://{self.account_info['server_ip']}"
@@ -1150,37 +948,51 @@ class MemberBrowseDialog(QDialog):
                     QMessageBox.warning(self, "경고", "입력한 정보로 찾은 사용자가 없습니다.")
                     return
 
-                self.progress_dialog = QProgressDialog("사용자 제거 중...", "취소", 0, len(resolved_list), self)
-                self.progress_dialog.setWindowTitle("진행 상황")
-                self.progress_dialog.setWindowModality(Qt.WindowModal)
-                self.progress_dialog.setMinimumDuration(0)
-
-                success_count = 0
-                failed_identifiers = []
-                for index, (orig_identifier, user_dn) in enumerate(resolved_list, start=1):
-                    if self.progress_dialog.wasCanceled():
-                        QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
-                        return
-
-                    modify_result = conn.modify(
-                        group_dn,
-                        {"member": [(ldap3.MODIFY_DELETE, [user_dn])]}
-                    )
-                    if modify_result:
-                        success_count += 1
-                    else:
-                        failed_identifiers.append(f"{orig_identifier}: {conn.result}")
-
-                    self.progress_dialog.setValue(index)
-                    self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 제거 중...")
-                    QApplication.processEvents()
-
-                self.progress_dialog.close()
+                success_count, failed_identifiers, canceled = self.run_member_modify(
+                    conn=conn,
+                    group_dn=group_dn,
+                    resolved_list=resolved_list,
+                    operation=ldap3.MODIFY_DELETE,
+                    progress_title="사용자 제거 중..."
+                )
+                if canceled:
+                    return
                 if failed_identifiers:
                     QMessageBox.warning(self, "일부 실패", "다음 사용자 제거에 실패했습니다:\n" + "\n".join(failed_identifiers))
                 QMessageBox.information(self, "완료", f"{success_count}/{len(resolved_list)}명의 사용자 제거 작업이 완료되었습니다.")
         except Exception as e:
             QMessageBox.critical(self, "LDAP 오류", f"LDAP 서버에 연결할 수 없습니다.\n오류: {str(e)}")
+
+    def run_member_modify(self, conn, group_dn, resolved_list, operation, progress_title):
+        self.progress_dialog = QProgressDialog(progress_title, "취소", 0, len(resolved_list), self)
+        self.progress_dialog.setWindowTitle("진행 상황")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+
+        success_count = 0
+        failed_identifiers = []
+
+        for index, (orig_identifier, user_dn) in enumerate(resolved_list, start=1):
+            if self.progress_dialog.wasCanceled():
+                QMessageBox.information(self, "알림", "작업이 취소되었습니다.")
+                self.progress_dialog.close()
+                return success_count, failed_identifiers, True
+
+            modify_result = conn.modify(
+                group_dn,
+                {"member": [(operation, [user_dn])]}
+            )
+            if modify_result:
+                success_count += 1
+            else:
+                failed_identifiers.append(f"{orig_identifier}: {conn.result}")
+
+            self.progress_dialog.setValue(index)
+            self.progress_dialog.setLabelText(f"사용자 {index}/{len(resolved_list)} 처리 중...")
+            QApplication.processEvents()
+
+        self.progress_dialog.close()
+        return success_count, failed_identifiers, False
 
 
 class MemberBrowseDialog(QDialog):
@@ -1363,15 +1175,16 @@ class MemberBrowseDialog(QDialog):
             self.tag_layout.addWidget(placeholder)
             self.tag_layout.addStretch()
             return
-        for row in range(self.user_table.rowCount()):
-            emp_item = self.user_table.item(row, 0)
-            if emp_item and emp_item.text() == employee_id:
-                row_index = self.user_table.model().index(row, 0)
-                selection_model.select(
-                    row_index,
-                    QtCore.QItemSelectionModel.Deselect | QtCore.QItemSelectionModel.Rows
-                )
-                break
+        new_desc = self.desc_input.text().strip()
+        try:
+            with self.get_connection() as conn:
+                conn.modify(self.group_dn, {"description": [(ldap3.MODIFY_REPLACE, [new_desc])]})
+                if conn.result.get("result") == 0:
+                    QMessageBox.information(self, "성공", "그룹 설명이 저장되었습니다.")
+                else:
+                    QMessageBox.critical(self, "실패", f"설명 저장 실패:\n{conn.result}")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"설명 저장 실패:\n{str(e)}")
 
         for row_idx in selected_rows:
             row = row_idx.row()
