@@ -1299,6 +1299,11 @@ class GroupManagementDialog(QDialog):
         self.parent_group_list.setMinimumHeight(260)
         self.add_parent_button = QPushButton("소속 그룹 추가")
         self.remove_parent_button = QPushButton("소속 그룹 삭제")
+        self.delete_group_button = QPushButton("그룹 삭제")
+        self.delete_group_button.setStyleSheet(
+            "QPushButton { background-color: #c0392b; color: white; border-radius: 6px; padding: 8px 14px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #a93226; }"
+        )
 
         desc_layout = QHBoxLayout()
         desc_layout.addWidget(self.desc_input)
@@ -1308,6 +1313,7 @@ class GroupManagementDialog(QDialog):
         parent_btn_layout.addWidget(self.add_parent_button)
         parent_btn_layout.addWidget(self.remove_parent_button)
         parent_btn_layout.addStretch()
+        parent_btn_layout.addWidget(self.delete_group_button)
 
         self.layout.addWidget(self.group_info_label)
         self.layout.addLayout(desc_layout)
@@ -1320,6 +1326,7 @@ class GroupManagementDialog(QDialog):
         self.save_desc_button.clicked.connect(self.save_description)
         self.add_parent_button.clicked.connect(self.add_parent_groups)
         self.remove_parent_button.clicked.connect(self.remove_parent_groups)
+        self.delete_group_button.clicked.connect(self.delete_group)
 
         self.load_group_info()
 
@@ -1457,6 +1464,32 @@ class GroupManagementDialog(QDialog):
             QMessageBox.information(self, "완료", f"{success}/{len(selected_dns)}개 소속 그룹 삭제 완료")
         except Exception as e:
             QMessageBox.critical(self, "LDAP 오류", f"소속 그룹 삭제 실패:\n{str(e)}")
+
+    def delete_group(self):
+        if not self.group_dn:
+            QMessageBox.warning(self, "경고", "삭제할 그룹 DN을 찾을 수 없습니다.")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "그룹 삭제 확인",
+            f"정말로 그룹 '{self.group_name}'을(를) 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            with self.get_connection() as conn:
+                result = conn.delete(self.group_dn)
+                if result:
+                    QMessageBox.information(self, "완료", f"그룹 '{self.group_name}'이(가) 삭제되었습니다.")
+                    self.accept()
+                else:
+                    QMessageBox.critical(self, "실패", f"그룹 삭제 실패:\n{conn.result}")
+        except Exception as e:
+            QMessageBox.critical(self, "LDAP 오류", f"그룹 삭제 실패:\n{str(e)}")
 
 
 class CreateGroupDialog(QDialog):
