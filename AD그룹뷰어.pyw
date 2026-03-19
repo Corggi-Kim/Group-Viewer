@@ -1177,11 +1177,13 @@ class MemberBrowseDialog(QDialog):
         self.tag_scroll = QScrollArea()
         self.tag_scroll.setWidgetResizable(True)
         self.tag_scroll.setFixedHeight(56)
+        self.tag_scroll.setStyleSheet("QScrollArea { border: 1px solid #444; background-color: #2b2b2b; }")
         self.tag_widget = QWidget()
         self.tag_layout = QHBoxLayout()
         self.tag_layout.setContentsMargins(6, 6, 6, 6)
         self.tag_layout.setSpacing(6)
         self.tag_widget.setLayout(self.tag_layout)
+        self.tag_widget.setStyleSheet("background-color: #2b2b2b;")
         self.tag_scroll.setWidget(self.tag_widget)
         self.user_table = QTableWidget()
         self.user_table.setColumnCount(4)
@@ -1192,6 +1194,10 @@ class MemberBrowseDialog(QDialog):
         self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.user_table.verticalHeader().setVisible(False)
         self.user_table.setSortingEnabled(True)
+        self.user_table.setStyleSheet(
+            "QTableWidget { background-color: #d9d9d9; color: #111; gridline-color: #bfbfbf; }"
+            "QHeaderView::section { background-color: #efefef; color: #111; }"
+        )
 
         button_layout = QHBoxLayout()
         self.select_button = QPushButton("선택")
@@ -1341,13 +1347,31 @@ class MemberBrowseDialog(QDialog):
             row = row_idx.row()
             emp = self.user_table.item(row, 0).text() if self.user_table.item(row, 0) else ""
             name = self.user_table.item(row, 2).text() if self.user_table.item(row, 2) else ""
-            tag = QLabel(f"{name} ({emp})")
+            tag = QPushButton(f"{name} ✕")
+            tag.setCursor(Qt.PointingHandCursor)
             tag.setStyleSheet(
-                "background-color:#3d7eff; color:white; border-radius:10px; "
-                "padding:4px 10px; font-size:11px;"
+                "background-color:#2b2b2b; color:#e0e0e0; border:1px solid #666; border-radius:8px; "
+                "padding:2px 8px; font-size:10px;"
             )
+            tag.clicked.connect(lambda _, employee_id=emp: self.remove_selected_tag(employee_id))
             self.tag_layout.addWidget(tag)
         self.tag_layout.addStretch()
+
+    def remove_selected_tag(self, employee_id):
+        if not employee_id:
+            return
+        selection_model = self.user_table.selectionModel()
+        if not selection_model:
+            return
+        for row in range(self.user_table.rowCount()):
+            emp_item = self.user_table.item(row, 0)
+            if emp_item and emp_item.text() == employee_id:
+                row_index = self.user_table.model().index(row, 0)
+                selection_model.select(
+                    row_index,
+                    QtCore.QItemSelectionModel.Deselect | QtCore.QItemSelectionModel.Rows
+                )
+                break
 
 
 class AddParentGroupsDialog(QDialog):
