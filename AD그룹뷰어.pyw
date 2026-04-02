@@ -209,6 +209,14 @@ class ADGroupViewer(QWidget):
         item.setTextAlignment(Qt.AlignCenter)
         return item
 
+    def get_entry_value(self, entry, attribute):
+        if attribute not in entry:
+            return ""
+        values = entry[attribute]
+        if not values:
+            return ""
+        return values[0]
+
     def center_on_parent(self, dialog):
         parent_geometry = self.geometry()
         dialog_geometry = dialog.geometry()
@@ -492,10 +500,10 @@ class ADGroupViewer(QWidget):
                     for i, member_dn in enumerate(members):
                         user_attributes = member_attributes.get(member_dn)
                         if user_attributes:
-                            sAMAccountName = user_attributes["sAMAccountName"][0] if "sAMAccountName" in user_attributes else ""
-                            department = user_attributes["department"][0] if "department" in user_attributes else ""
-                            displayName = user_attributes["displayName"][0] if "displayName" in user_attributes else ""
-                            mail = user_attributes["mail"][0] if "mail" in user_attributes else ""
+                            sAMAccountName = self.get_entry_value(user_attributes, "sAMAccountName")
+                            department = self.get_entry_value(user_attributes, "department")
+                            displayName = self.get_entry_value(user_attributes, "displayName")
+                            mail = self.get_entry_value(user_attributes, "mail")
                             self.member_table.setItem(i, 0, self.make_center_item(sAMAccountName))
                             self.member_table.setItem(i, 1, self.make_center_item(department))
                             self.member_table.setItem(i, 2, self.make_center_item(displayName))
